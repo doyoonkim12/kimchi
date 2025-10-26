@@ -208,6 +208,7 @@ async function processStatusChange(issueCode, command, value) {
       case '진행':
         return await processProgress(issueCode, targetRow);
       case '바낸달러':
+      case '바낸달라':
         return await processRemainingDollar(issueCode, value, targetRow);
       case '입금':
         return await processDeposit(issueCode, value, targetRow);
@@ -561,9 +562,14 @@ async function processTelegramCommand(text, chatId, userId, userName) {
     
     // 5. 상태 변경 명령어
     if (parts.length >= 2) {
+      // 5-1. 발급코드 + 숫자만 (바낸달러 입력으로 간주)
+      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        return await processStatusChange(parts[0], '바낸달러', parts[1]);
+      }
+      // 5-2. 일반 상태 변경 (발급코드 + 명령어 + 값)
       return await processStatusChange(parts[0], parts[1], parts[2]);
     }
-    
+
     return '알 수 없는 명령어입니다.';
     
   } catch (error) {
