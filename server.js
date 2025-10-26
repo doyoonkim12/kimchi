@@ -848,7 +848,126 @@ async function getCompleteList() {
 }
 
 async function executeRebuild() {
-  return '리빌드 기능을 구현 중입니다.';
+  try {
+    // 1. 당일작업 시트에서 정산완료된 데이터 가져오기
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '리빌드할 데이터가 없습니다.';
+    }
+
+    let processedCount = 0;
+    const processedRows = [];
+
+    // 2. 정산완료된 행들 처리
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+
+      // 정산완료된 데이터만 처리 (I열=8이 "정산완료" 또는 "완료")
+      if (row[8] === '정산완료' || row[8] === '완료') {
+        const name = row[1]; // B열: 이름
+        const issueCode = row[17]; // R열: 발급코드
+
+        // 개인 시트에 데이터 복사
+        const copied = await copyToPersonalSheet(name, row, issueCode);
+
+        if (copied) {
+          processedCount++;
+          processedRows.push(i + 1); // 행 번호 저장 (1-based)
+        }
+      }
+    }
+
+    // 3. 처리된 행들 삭제 (뒤에서부터 삭제해야 인덱스 안 꼬임)
+    for (let i = processedRows.length - 1; i >= 0; i--) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        resource: {
+          requests: [{
+            deleteDimension: {
+              range: {
+                sheetId: 0, // 당일작업 시트 ID (첫번째 시트는 0)
+                dimension: 'ROWS',
+                startIndex: processedRows[i] - 1,
+                endIndex: processedRows[i]
+              }
+            }
+          }]
+        }
+      });
+    }
+
+    return `리빌드 완료!\n처리된 항목: ${processedCount}개`;
+
+  } catch (error) {
+    console.error('리빌드 오류:', error);
+    return '리빌드 처리 중 오류가 발생했습니다.';
+  }
+}
+
+// 개인 시트에 데이터 복사
+async function copyToPersonalSheet(name, rowData, issueCode) {
+  try {
+    // 1. 해당 이름의 시트가 있는지 확인
+    const sheetName = name;
+
+    // 2. 해당 시트에서 중복 발급코드 체크
+    const checkResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `${sheetName}!P:P` // P열: 발급코드
+    }).catch(() => null);
+
+    if (checkResponse && checkResponse.data.values) {
+      // 중복 체크
+      for (let i = 1; i < checkResponse.data.values.length; i++) {
+        if (checkResponse.data.values[i][0] === issueCode) {
+          console.log(`중복 발급코드 발견: ${issueCode} (${name} 시트)`);
+          return false; // 중복이면 복사 안함
+        }
+      }
+    }
+
+    // 3. 개인 시트용 데이터 구성
+    // 입금날짜, 이름, 플랫폼, 은행, 입금, 출금, 수익, 정산, 최종달러, 달러가격,
+    // 외화입금날짜, 외화, 외화입금, 종류, 계좌코드, 발급코드
+    const personalData = [
+      rowData[0],  // 입금날짜 (A)
+      rowData[1],  // 이름 (B)
+      rowData[2],  // 플랫폼 (C)
+      rowData[3],  // 계좌정보/은행 (D)
+      rowData[4],  // 입금 (E)
+      rowData[5],  // 출금 (F)
+      rowData[6],  // 수익 (G)
+      rowData[8],  // 정산 (I)
+      rowData[16], // 최종달러 (Q)
+      rowData[18], // 달러가격 (S)
+      rowData[9],  // 외화입금날짜 (J)
+      rowData[10], // 외화 (K)
+      rowData[11], // 외화입금 (L)
+      rowData[13], // 종류 (N)
+      rowData[19], // 계좌코드 (T)
+      rowData[17]  // 발급코드 (R)
+    ];
+
+    // 4. 개인 시트에 추가
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `${sheetName}!A:P`,
+      valueInputOption: 'RAW',
+      resource: { values: [personalData] }
+    });
+
+    console.log(`${name} 시트에 발급코드 ${issueCode} 데이터 복사 완료`);
+    return true;
+
+  } catch (error) {
+    console.error(`개인 시트 복사 오류 (${name}):`, error);
+    return false;
+  }
 }
 
 async function getStatusList(status) {
