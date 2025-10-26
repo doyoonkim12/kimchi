@@ -576,8 +576,25 @@ async function processTelegramCommand(text, chatId, userId, userName) {
       case '마무리':
         return await getStatusList(command);
     }
-    
-    // 3. 코드별 조회
+
+    // 3. 판매기록 명령어 (판매기록 [판매달러] [판매금액])
+    if (command === '판매기록' && parts.length === 3) {
+      const salesDollar = parseFloat(parts[1]);
+      const salesAmount = parseFloat(parts[2]);
+
+      if (isNaN(salesDollar) || isNaN(salesAmount)) {
+        return '⚠️ 올바른 숫자 형식이 아닙니다.\n사용법: 판매기록 [판매달러] [판매금액]\n예시: 판매기록 1500 2100000';
+      }
+
+      if (salesDollar <= 0 || salesAmount <= 0) {
+        return '⚠️ 판매달러와 판매금액은 0보다 커야 합니다.';
+      }
+
+      const result = await recordUSDTSale(salesDollar, salesAmount);
+      return result.message;
+    }
+
+    // 4. 코드별 조회
     if (command.startsWith('코드')) {
       const code = command.replace('코드', '');
       return await getCodeInfo(code);
@@ -1832,6 +1849,78 @@ async function recordUSDTDeposit(amount, depositDate) {
     }
   } catch (error) {
     console.error('출금내역시트 입금 기록 오류:', error);
+  }
+}
+
+// 출금내역시트에 USDT 판매 기록 (업비트 C열, D열, G열)
+async function recordUSDTSale(salesDollar, salesAmount) {
+  try {
+    const today = new Date().toLocaleDateString('ko-KR');
+
+    // 출금내역시트 읽기
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '출금내역시트!A:G'
+    });
+
+    const sheetData = response.data.values || [];
+    let rowIndex = -1;
+
+    // 오늘 날짜가 이미 있는지 확인 (A열에서 날짜 찾기)
+    for (let i = 1; i < sheetData.length; i++) {
+      if (sheetData[i][0] === today) {
+        rowIndex = i + 1; // 1-based index
+        break;
+      }
+    }
+
+    if (rowIndex === -1) {
+      // 새 행 추가: A열(날짜), C열(판매달러), D열(판매금액), G열(평단)
+      const averagePrice = Math.round(salesAmount / salesDollar);
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: '출금내역시트!A:G',
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[today, '', salesDollar, salesAmount, '', '', averagePrice]]
+        }
+      });
+      console.log(`출금내역시트 신규 판매 기록: ${today}, ${salesDollar} USDT, ${salesAmount.toLocaleString()} 원`);
+      return { success: true, message: `신규 판매 기록 완료!\n날짜: ${today}\n판매달러: ${salesDollar} USDT\n판매금액: ${salesAmount.toLocaleString()} 원\n평단: ${averagePrice.toLocaleString()} 원` };
+    } else {
+      // 기존 행 업데이트
+      const existingSalesDollar = parseFloat(sheetData[rowIndex - 1][2]) || 0;
+      const existingSalesAmount = parseFloat(sheetData[rowIndex - 1][3]) || 0;
+
+      const newSalesDollar = existingSalesDollar + salesDollar;
+      const newSalesAmount = existingSalesAmount + salesAmount;
+      const averagePrice = Math.round(newSalesAmount / newSalesDollar);
+
+      // C열(판매달러), D열(판매금액), G열(평단) 업데이트
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: `출금내역시트!C${rowIndex}:D${rowIndex}`,
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[newSalesDollar, newSalesAmount]]
+        }
+      });
+
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: `출금내역시트!G${rowIndex}`,
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[averagePrice]]
+        }
+      });
+
+      console.log(`출금내역시트 판매 누적: ${today}, ${newSalesDollar} USDT, ${newSalesAmount.toLocaleString()} 원 (평단: ${averagePrice.toLocaleString()})`);
+      return { success: true, message: `판매 기록 완료!\n날짜: ${today}\n판매달러: ${newSalesDollar} USDT (기존: ${existingSalesDollar})\n판매금액: ${newSalesAmount.toLocaleString()} 원 (기존: ${existingSalesAmount.toLocaleString()})\n평단: ${averagePrice.toLocaleString()} 원` };
+    }
+  } catch (error) {
+    console.error('출금내역시트 판매 기록 오류:', error);
+    return { success: false, message: '⚠️ 판매 기록 중 오류가 발생했습니다.' };
   }
 }
 
