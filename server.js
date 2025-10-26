@@ -555,6 +555,10 @@ async function processTelegramCommand(text, chatId, userId, userName) {
         return stopDepositMonitoring();
       case '모니터링확인':
         return await checkRecentDeposits(chatId);
+      case '서버아이피':
+      case 'ip확인':
+      case '아이피':
+        return await getServerIP();
       case '자동거래시작':
       case '자동판매시작':
       case '오토트레이딩':
@@ -1893,6 +1897,30 @@ function stopDepositMonitoring() {
 
   console.log('입금 모니터링 중지됨');
   return '⏸️ 입금 모니터링을 중지했습니다.';
+}
+
+// 서버 IP 확인
+async function getServerIP() {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    const serverIP = response.data.ip;
+
+    return `
+🖥️ <b>Render 서버 IP 주소</b>
+
+📍 <b>서버 IP</b>: ${serverIP}
+
+이 IP 주소를 업비트 Open API 설정에 등록하세요:
+1. 업비트 로그인 → 내정보 → Open API 관리
+2. API 키 수정 → 허용 IP 추가
+3. 위 IP 주소(${serverIP}) 입력 후 저장
+
+⚠️ 또는 "모든 IP 허용"으로 변경 가능 (보안 낮음)
+    `.trim();
+  } catch (error) {
+    console.error('서버 IP 조회 오류:', error);
+    return '⚠️ 서버 IP 조회 중 오류가 발생했습니다.';
+  }
 }
 
 // 최근 6시간 입금 내역 확인 및 시트 기록
