@@ -7,6 +7,9 @@ const express = require('express');
 const axios = require('axios');
 const { google } = require('googleapis');
 const { GoogleAuth } = require('google-auth-library');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 const app = express();
@@ -20,6 +23,10 @@ app.use(express.urlencoded({ extended: true }));
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CREDENTIALS = process.env.GOOGLE_CREDENTIALS;
+const UPBIT_ACCESS_KEY = process.env.UPBIT_ACCESS_KEY || '';
+const UPBIT_SECRET_KEY = process.env.UPBIT_SECRET_KEY || '';
+const COINONE_ACCESS_TOKEN = process.env.COINONE_ACCESS_TOKEN || '';
+const COINONE_SECRET_KEY = process.env.COINONE_SECRET_KEY || '';
 
 // 구글 시트 API 설정
 let sheets;
@@ -506,6 +513,19 @@ async function processTelegramCommand(text, userId, userName) {
         return await getCompleteList();
       case '리빌드':
         return await executeRebuild();
+      case '업비트업데이트':
+      case '업비트':
+        const upbitResult = await updateUpbitData();
+        return upbitResult.message;
+      case '코인원업데이트':
+      case '코인원':
+        const coinoneResult = await updateCoinoneData();
+        return coinoneResult.message;
+      case '전체업데이트':
+      case '출금내역업데이트':
+        const upbitRes = await updateUpbitData();
+        const coinoneRes = await updateCoinoneData();
+        return `${upbitRes.message}\n${coinoneRes.message}`;
       case '대기':
       case '진행대기':
       case '진행중':
@@ -833,6 +853,385 @@ async function getUserStatus(name) {
 function isValidName(name) {
   const validNames = ['김도윤', '이철수', '정수진', '곽성민', '강경아'];
   return validNames.includes(name);
+}
+
+// ============================================
+// 업비트 API 연동
+// ============================================
+
+// 업비트 JWT 토큰 생성
+function generateUpbitToken(queryParams = null) {
+  const payload = {
+    access_key: UPBIT_ACCESS_KEY,
+    nonce: uuidv4(),
+  };
+
+  if (queryParams) {
+    const query = new URLSearchParams(queryParams).toString();
+    const hash = crypto.createHash('sha512');
+    const queryHash = hash.update(query, 'utf-8').digest('hex');
+    payload.query_hash = queryHash;
+    payload.query_hash_alg = 'SHA512';
+  }
+
+  return jwt.sign(payload, UPBIT_SECRET_KEY);
+}
+
+// 업비트 입금 내역 조회
+async function getUpbitDeposits(currency = 'USDT', state = 'ACCEPTED', limit = 100) {
+  try {
+    const params = { currency, state, limit };
+    const token = generateUpbitToken(params);
+
+    const response = await axios.get('https://api.upbit.com/v1/deposits', {
+      params,
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('업비트 입금 내역 조회 오류:', error.response?.data || error.message);
+    return [];
+  }
+}
+
+// 업비트 출금 내역 조회
+async function getUpbitWithdrawals(currency = 'KRW', state = 'DONE', limit = 100) {
+  try {
+    const params = { currency, state, limit };
+    const token = generateUpbitToken(params);
+
+    const response = await axios.get('https://api.upbit.com/v1/withdraws', {
+      params,
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('업비트 출금 내역 조회 오류:', error.response?.data || error.message);
+    return [];
+  }
+}
+
+// 업비트 주문 내역 조회 (판매 내역)
+async function getUpbitOrders(market = 'KRW-USDT', state = 'done', limit = 100) {
+  try {
+    const params = { market, state, limit };
+    const token = generateUpbitToken(params);
+
+    const response = await axios.get('https://api.upbit.com/v1/orders', {
+      params,
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('업비트 주문 내역 조회 오류:', error.response?.data || error.message);
+    return [];
+  }
+}
+
+// ============================================
+// 코인원 API 연동
+// ============================================
+
+// 코인원 API 서명 생성
+function generateCoinoneSignature(payload) {
+  const encoded_payload = Buffer.from(JSON.stringify(payload)).toString('base64');
+  const signature = crypto
+    .createHmac('sha512', COINONE_SECRET_KEY.toUpperCase())
+    .update(encoded_payload)
+    .digest('hex');
+
+  return { encoded_payload, signature };
+}
+
+// 코인원 입출금 내역 조회
+async function getCoinoneTransactions(currency = 'usdt') {
+  try {
+    const payload = {
+      access_token: COINONE_ACCESS_TOKEN,
+      currency: currency.toLowerCase(),
+      nonce: Date.now()
+    };
+
+    const { encoded_payload, signature } = generateCoinoneSignature(payload);
+
+    const response = await axios.post('https://api.coinone.co.kr/v2/transaction/coin/', payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-COINONE-PAYLOAD': encoded_payload,
+        'X-COINONE-SIGNATURE': signature
+      }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('코인원 입출금 내역 조회 오류:', error.response?.data || error.message);
+    return { result: 'error', transactions: [] };
+  }
+}
+
+// 코인원 원화 입출금 내역 조회
+async function getCoinoneKRWTransactions() {
+  try {
+    const payload = {
+      access_token: COINONE_ACCESS_TOKEN,
+      nonce: Date.now()
+    };
+
+    const { encoded_payload, signature } = generateCoinoneSignature(payload);
+
+    const response = await axios.post('https://api.coinone.co.kr/v2/transaction/krw/', payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-COINONE-PAYLOAD': encoded_payload,
+        'X-COINONE-SIGNATURE': signature
+      }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('코인원 원화 입출금 내역 조회 오류:', error.response?.data || error.message);
+    return { result: 'error', transactions: [] };
+  }
+}
+
+// ============================================
+// 출금내역 시트 데이터 처리
+// ============================================
+
+// 업비트 데이터 수집 및 구글 시트 업데이트
+async function updateUpbitData() {
+  try {
+    // USDT 입금 내역 조회
+    const deposits = await getUpbitDeposits('USDT');
+
+    // 주문 내역 조회 (판매)
+    const orders = await getUpbitOrders('KRW-USDT', 'done');
+
+    // KRW 출금 내역 조회
+    const withdrawals = await getUpbitWithdrawals('KRW');
+
+    // 날짜별로 데이터 그룹화
+    const dailyData = {};
+
+    // 입금 데이터 처리
+    deposits.forEach(deposit => {
+      const date = new Date(deposit.done_at).toLocaleDateString('ko-KR');
+      if (!dailyData[date]) dailyData[date] = { deposits: 0, sales: 0, salesAmount: 0, withdrawals: 0 };
+      dailyData[date].deposits += parseFloat(deposit.amount);
+    });
+
+    // 판매 데이터 처리 (완전히 체결된 주문만)
+    orders.forEach(order => {
+      if (order.side === 'ask' && parseFloat(order.executed_volume) === parseFloat(order.volume)) {
+        const date = new Date(order.created_at).toLocaleDateString('ko-KR');
+        if (!dailyData[date]) dailyData[date] = { deposits: 0, sales: 0, salesAmount: 0, withdrawals: 0 };
+        dailyData[date].sales += parseFloat(order.executed_volume);
+        dailyData[date].salesAmount += parseFloat(order.price) * parseFloat(order.executed_volume);
+      }
+    });
+
+    // 출금 데이터 처리
+    withdrawals.forEach(withdrawal => {
+      const date = new Date(withdrawal.done_at).toLocaleDateString('ko-KR');
+      if (!dailyData[date]) dailyData[date] = { deposits: 0, sales: 0, salesAmount: 0, withdrawals: 0 };
+      dailyData[date].withdrawals += parseFloat(withdrawal.amount);
+    });
+
+    // 구글 시트에 업데이트
+    for (const [date, data] of Object.entries(dailyData)) {
+      const averageDollar = data.sales > 0 ? Math.round(data.salesAmount / data.sales) : 0;
+
+      await updateWithdrawalSheet('upbit', date, {
+        depositDate: date,
+        depositDollar: Math.round(data.deposits),
+        salesDollar: Math.round(data.sales),
+        salesAmount: Math.round(data.salesAmount),
+        withdrawalDate: date,
+        withdrawalAmount: Math.round(data.withdrawals),
+        averageDollar: averageDollar
+      });
+    }
+
+    return { success: true, message: '업비트 데이터 업데이트 완료' };
+  } catch (error) {
+    console.error('업비트 데이터 업데이트 오류:', error);
+    return { success: false, message: '업비트 데이터 업데이트 실패' };
+  }
+}
+
+// 코인원 데이터 수집 및 구글 시트 업데이트
+async function updateCoinoneData() {
+  try {
+    // USDT 입출금 내역 조회
+    const usdtTransactions = await getCoinoneTransactions('usdt');
+
+    // KRW 입출금 내역 조회
+    const krwTransactions = await getCoinoneKRWTransactions();
+
+    // 날짜별로 데이터 그룹화
+    const dailyData = {};
+
+    // USDT 거래 데이터 처리
+    if (usdtTransactions.transactions) {
+      usdtTransactions.transactions.forEach(tx => {
+        const date = new Date(parseInt(tx.timestamp) * 1000).toLocaleDateString('ko-KR');
+        if (!dailyData[date]) dailyData[date] = { deposits: 0, sales: 0, salesAmount: 0, withdrawals: 0 };
+
+        if (tx.type === 'deposit') {
+          dailyData[date].deposits += parseFloat(tx.amount);
+        }
+      });
+    }
+
+    // KRW 출금 데이터 처리
+    if (krwTransactions.transactions) {
+      krwTransactions.transactions.forEach(tx => {
+        const date = new Date(parseInt(tx.timestamp) * 1000).toLocaleDateString('ko-KR');
+        if (!dailyData[date]) dailyData[date] = { deposits: 0, sales: 0, salesAmount: 0, withdrawals: 0 };
+
+        if (tx.type === 'withdrawal') {
+          dailyData[date].withdrawals += parseFloat(tx.amount);
+        }
+      });
+    }
+
+    // 구글 시트에 업데이트
+    for (const [date, data] of Object.entries(dailyData)) {
+      const averageDollar = data.sales > 0 ? Math.round(data.salesAmount / data.sales) : 0;
+
+      await updateWithdrawalSheet('coinone', date, {
+        depositDate: date,
+        depositDollar: Math.round(data.deposits),
+        salesDollar: Math.round(data.sales),
+        salesAmount: Math.round(data.salesAmount),
+        withdrawalDate: date,
+        withdrawalAmount: Math.round(data.withdrawals),
+        averageDollar: averageDollar
+      });
+    }
+
+    return { success: true, message: '코인원 데이터 업데이트 완료' };
+  } catch (error) {
+    console.error('코인원 데이터 업데이트 오류:', error);
+    return { success: false, message: '코인원 데이터 업데이트 실패' };
+  }
+}
+
+// 출금내역 시트 업데이트
+async function updateWithdrawalSheet(exchange, date, data) {
+  try {
+    // 출금내역 시트 읽기
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '출금내역!A:P'
+    });
+
+    const sheetData = response.data.values || [];
+    let rowIndex = -1;
+
+    // 업비트: A~G 열, 코인원: I~O 열
+    const colOffset = exchange === 'upbit' ? 0 : 8;
+
+    // 해당 날짜 찾기
+    for (let i = 1; i < sheetData.length; i++) {
+      const cellDate = sheetData[i][colOffset];
+      if (cellDate === date) {
+        rowIndex = i + 1;
+        break;
+      }
+    }
+
+    // 새 행 추가 또는 기존 행 업데이트
+    if (rowIndex === -1) {
+      // 새 행 추가
+      const newRow = exchange === 'upbit'
+        ? [
+            data.depositDate,
+            data.depositDollar,
+            data.salesDollar,
+            data.salesAmount,
+            data.withdrawalDate,
+            data.withdrawalAmount,
+            data.averageDollar
+          ]
+        : Array(8).fill('').concat([
+            data.depositDate,
+            data.depositDollar,
+            data.salesDollar,
+            data.salesAmount,
+            data.withdrawalDate,
+            data.withdrawalAmount,
+            data.averageDollar
+          ]);
+
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: '출금내역!A:P',
+        valueInputOption: 'RAW',
+        resource: { values: [newRow] }
+      });
+    } else {
+      // 기존 행 업데이트
+      const startCol = exchange === 'upbit' ? 'A' : 'I';
+      const endCol = exchange === 'upbit' ? 'G' : 'O';
+
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: `출금내역!${startCol}${rowIndex}:${endCol}${rowIndex}`,
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[
+            data.depositDate,
+            data.depositDollar,
+            data.salesDollar,
+            data.salesAmount,
+            data.withdrawalDate,
+            data.withdrawalAmount,
+            data.averageDollar
+          ]]
+        }
+      });
+    }
+
+    // 당일달러 계산 및 업데이트 (P열)
+    await updateDailyDollar(rowIndex === -1 ? sheetData.length + 1 : rowIndex);
+
+    console.log(`${exchange} 데이터 업데이트 완료: ${date}`);
+  } catch (error) {
+    console.error('출금내역 시트 업데이트 오류:', error);
+  }
+}
+
+// 당일달러 계산 (업비트 평균 + 코인원 평균 / 2)
+async function updateDailyDollar(rowIndex) {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `출금내역!G${rowIndex}:O${rowIndex}`
+    });
+
+    if (response.data.values && response.data.values.length > 0) {
+      const row = response.data.values[0];
+      const upbitAvg = parseFloat(row[0]) || 0; // G열
+      const coinoneAvg = parseFloat(row[8]) || 0; // O열
+
+      const dailyDollar = upbitAvg > 0 && coinoneAvg > 0
+        ? Math.round((upbitAvg + coinoneAvg) / 2)
+        : upbitAvg > 0 ? upbitAvg : coinoneAvg;
+
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: `출금내역!P${rowIndex}`,
+        valueInputOption: 'RAW',
+        resource: { values: [[dailyDollar]] }
+      });
+    }
+  } catch (error) {
+    console.error('당일달러 계산 오류:', error);
+  }
 }
 
 // 서버 시작
