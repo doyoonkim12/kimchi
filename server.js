@@ -62,7 +62,7 @@ async function getAccountInfo(accountCode) {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: '계좌정보!W:Z'
+      range: '계좌정보!W2:Z'
     });
     
     const data = response.data.values;
