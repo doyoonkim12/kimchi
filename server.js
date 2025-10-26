@@ -37,6 +37,10 @@ let depositMonitoringActive = false;
 let lastCheckedDepositId = null;
 let monitoringChatId = null;
 
+// 자동 거래 설정
+let autoTradingActive = false;
+let activeOrders = new Map(); // uuid -> { amount, chatId, createdAt, retryCount }
+
 async function initializeGoogleSheets() {
   try {
     const credentials = JSON.parse(GOOGLE_CREDENTIALS);
@@ -404,16 +408,16 @@ async function processSettlementComplete(issueCode, row) {
 // 달러가격 업데이트
 async function updateDollarPrice(row) {
   try {
-    // 출금내역시트에서 당일달러 가격 가져오기
+    // 출금내역 시트에서 당일달러 가격 가져오기
     const today = new Date();
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: '출금내역시트!A:P'
+      range: '출금내역!A:P'
     });
-    
+
     const data = response.data.values;
     let todayDollarPrice = null;
-    
+
     for (let i = 1; i < data.length; i++) {
       const rowDate = new Date(data[i][0]);
       if (isSameDay(today, rowDate)) {
@@ -421,7 +425,7 @@ async function updateDollarPrice(row) {
         break;
       }
     }
-    
+
     if (todayDollarPrice) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: GOOGLE_SHEET_ID,
@@ -539,6 +543,14 @@ async function processTelegramCommand(text, chatId, userId, userName) {
       case '모니터링중지':
       case '입금체크중지':
         return stopDepositMonitoring();
+      case '자동거래시작':
+      case '자동판매시작':
+      case '오토트레이딩':
+        return await enableAutoTrading(chatId);
+      case '자동거래중지':
+      case '자동판매중지':
+      case '오토트레이딩중지':
+        return await disableAutoTrading();
       case '대기':
       case '진행대기':
       case '진행중':
@@ -1063,6 +1075,101 @@ async function getUpbitOrders(market = 'KRW-USDT', state = 'done', limit = 100) 
   }
 }
 
+// 업비트 현재가 조회
+async function getUpbitCurrentPrice(market = 'KRW-USDT') {
+  try {
+    const response = await axios.get(`https://api.upbit.com/v1/ticker?markets=${market}`);
+
+    if (response.data && response.data.length > 0) {
+      return response.data[0].trade_price; // 현재가
+    }
+    return null;
+  } catch (error) {
+    console.error('현재가 조회 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// 업비트 지정가 주문
+async function placeUpbitLimitOrder(market, side, volume, price) {
+  try {
+    const params = {
+      market,
+      side, // 'bid' (매수) or 'ask' (매도)
+      volume: volume.toString(),
+      price: price.toString(),
+      ord_type: 'limit'
+    };
+
+    const token = generateUpbitToken(params);
+
+    const response = await axios.post('https://api.upbit.com/v1/orders', params, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('주문 생성 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// 업비트 주문 상태 조회
+async function getUpbitOrderStatus(uuid) {
+  try {
+    const params = { uuid };
+    const token = generateUpbitToken(params);
+
+    const response = await axios.get('https://api.upbit.com/v1/order', {
+      params,
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('주문 상태 조회 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// 업비트 주문 취소
+async function cancelUpbitOrder(uuid) {
+  try {
+    const params = { uuid };
+    const token = generateUpbitToken(params);
+
+    const response = await axios.delete('https://api.upbit.com/v1/order', {
+      params,
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('주문 취소 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// 업비트 USDT 잔고 조회
+async function getUpbitUSDTBalance() {
+  try {
+    const token = generateUpbitToken();
+
+    const response = await axios.get('https://api.upbit.com/v1/accounts', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    const usdtAccount = response.data.find(acc => acc.currency === 'USDT');
+    return usdtAccount ? parseFloat(usdtAccount.balance) : 0;
+  } catch (error) {
+    console.error('잔고 조회 오류:', error.response?.data || error.message);
+    return 0;
+  }
+}
+
 // ============================================
 // 코인원 API 연동
 // ============================================
@@ -1434,6 +1541,84 @@ function stopDepositMonitoring() {
   return '⏸️ 입금 모니터링을 중지했습니다.';
 }
 
+// ============================================
+// 자동 거래 시스템
+// ============================================
+
+// USDT 자동 판매 실행
+async function autoSellUSDT(amount, chatId) {
+  try {
+    // 1. 현재가 조회
+    const currentPrice = await getUpbitCurrentPrice('KRW-USDT');
+    if (!currentPrice) {
+      await sendTelegramMessage(chatId, '⚠️ 현재가 조회 실패');
+      return null;
+    }
+
+    // 2. 지정가 주문 (판매)
+    const order = await placeUpbitLimitOrder('KRW-USDT', 'ask', amount, currentPrice);
+    if (!order || !order.uuid) {
+      await sendTelegramMessage(chatId, '⚠️ 주문 생성 실패');
+      return null;
+    }
+
+    // 3. 주문 정보 저장
+    activeOrders.set(order.uuid, {
+      amount: amount,
+      chatId: chatId,
+      createdAt: new Date(),
+      retryCount: 0,
+      initialPrice: currentPrice
+    });
+
+    await sendTelegramMessage(chatId, `
+📊 <b>USDT 자동 판매 시작</b>
+
+💵 <b>수량</b>: ${amount.toFixed(2)} USDT
+💰 <b>지정가</b>: ${Math.round(currentPrice).toLocaleString()} 원
+⏰ <b>주문 시각</b>: ${new Date().toLocaleString('ko-KR')}
+
+5분마다 체결 상태를 확인합니다.
+    `.trim());
+
+    console.log(`자동 거래 시작: ${amount} USDT @ ${currentPrice} KRW`);
+    return order.uuid;
+
+  } catch (error) {
+    console.error('자동 판매 오류:', error);
+    await sendTelegramMessage(chatId, '⚠️ 자동 거래 중 오류 발생');
+    return null;
+  }
+}
+
+// 자동 거래 활성화
+async function enableAutoTrading(chatId) {
+  if (autoTradingActive) {
+    return '자동 거래가 이미 활성화되어 있습니다.';
+  }
+
+  autoTradingActive = true;
+  return '✅ 자동 거래 기능을 활성화했습니다.\nUSDT 입금 시 자동으로 현재가에 판매 주문을 걸고, 5분마다 재시도합니다.';
+}
+
+// 자동 거래 비활성화
+async function disableAutoTrading() {
+  if (!autoTradingActive) {
+    return '자동 거래가 비활성화 상태입니다.';
+  }
+
+  autoTradingActive = false;
+
+  // 진행 중인 주문 모두 취소
+  for (const [uuid, orderInfo] of activeOrders.entries()) {
+    await cancelUpbitOrder(uuid);
+    await sendTelegramMessage(orderInfo.chatId, `🛑 주문 ${uuid.substring(0, 8)}... 취소됨`);
+  }
+  activeOrders.clear();
+
+  return '⏸️ 자동 거래를 비활성화하고 모든 진행 중인 주문을 취소했습니다.';
+}
+
 // 주기적으로 입금 체크 (30초마다)
 setInterval(async () => {
   if (!depositMonitoringActive || !monitoringChatId) {
@@ -1465,8 +1650,98 @@ setInterval(async () => {
 
     await sendTelegramMessage(monitoringChatId, message);
     console.log(`새 입금 알림 전송: ${netAmount.toFixed(2)} USDT`);
+
+    // 자동 거래 활성화된 경우 즉시 판매 시작
+    if (autoTradingActive && netAmount > 0) {
+      await autoSellUSDT(netAmount, monitoringChatId);
+    }
   }
 }, 30000); // 30초마다 체크
+
+// 주문 상태 체크 및 재주문 (5분마다)
+setInterval(async () => {
+  if (!autoTradingActive || activeOrders.size === 0) {
+    return;
+  }
+
+  for (const [uuid, orderInfo] of activeOrders.entries()) {
+    try {
+      // 1. 주문 상태 조회
+      const orderStatus = await getUpbitOrderStatus(uuid);
+
+      if (!orderStatus) {
+        continue;
+      }
+
+      // 2. 완전 체결된 경우
+      if (orderStatus.state === 'done') {
+        const executedPrice = parseFloat(orderStatus.price);
+        const executedVolume = parseFloat(orderStatus.executed_volume);
+        const totalAmount = Math.round(executedPrice * executedVolume);
+
+        await sendTelegramMessage(orderInfo.chatId, `
+✅ <b>주문 체결 완료!</b>
+
+💵 <b>수량</b>: ${executedVolume.toFixed(2)} USDT
+💰 <b>체결가</b>: ${Math.round(executedPrice).toLocaleString()} 원
+💸 <b>총액</b>: ${totalAmount.toLocaleString()} 원
+⏰ <b>체결 시각</b>: ${new Date().toLocaleString('ko-KR')}
+        `.trim());
+
+        activeOrders.delete(uuid);
+        console.log(`주문 체결 완료: ${uuid}`);
+        continue;
+      }
+
+      // 3. 5분 경과 확인
+      const elapsedMinutes = (new Date() - orderInfo.createdAt) / 60000;
+
+      if (elapsedMinutes >= 5) {
+        // 기존 주문 취소
+        await cancelUpbitOrder(uuid);
+        activeOrders.delete(uuid);
+
+        console.log(`주문 ${uuid} 취소 (5분 경과)`);
+
+        // 새로운 현재가로 재주문
+        const currentPrice = await getUpbitCurrentPrice('KRW-USDT');
+        if (!currentPrice) {
+          await sendTelegramMessage(orderInfo.chatId, '⚠️ 재주문 실패: 현재가 조회 불가');
+          continue;
+        }
+
+        const newOrder = await placeUpbitLimitOrder('KRW-USDT', 'ask', orderInfo.amount, currentPrice);
+        if (!newOrder || !newOrder.uuid) {
+          await sendTelegramMessage(orderInfo.chatId, '⚠️ 재주문 실패');
+          continue;
+        }
+
+        // 새 주문 정보 저장
+        activeOrders.set(newOrder.uuid, {
+          amount: orderInfo.amount,
+          chatId: orderInfo.chatId,
+          createdAt: new Date(),
+          retryCount: orderInfo.retryCount + 1,
+          initialPrice: orderInfo.initialPrice
+        });
+
+        await sendTelegramMessage(orderInfo.chatId, `
+🔄 <b>재주문 실행</b>
+
+💵 <b>수량</b>: ${orderInfo.amount.toFixed(2)} USDT
+💰 <b>새 지정가</b>: ${Math.round(currentPrice).toLocaleString()} 원
+📊 <b>재시도</b>: ${orderInfo.retryCount + 1}회
+⏰ <b>재주문 시각</b>: ${new Date().toLocaleString('ko-KR')}
+        `.trim());
+
+        console.log(`재주문 완료: ${orderInfo.amount} USDT @ ${currentPrice} KRW (${orderInfo.retryCount + 1}회)`);
+      }
+
+    } catch (error) {
+      console.error(`주문 ${uuid} 처리 오류:`, error);
+    }
+  }
+}, 300000); // 5분마다 체크
 
 // 서버 시작
 app.listen(PORT, async () => {
