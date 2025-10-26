@@ -1972,7 +1972,8 @@ async function checkRecentDeposits(chatId) {
       const amount = parseFloat(deposit.amount);
       const fee = parseFloat(deposit.fee) || 0;
       const netAmount = amount - fee;
-      const time = new Date(deposit.done_at).toLocaleString('ko-KR');
+      const depositDate = new Date(deposit.done_at); // 원본 Date 객체
+      const time = depositDate.toLocaleString('ko-KR');
       const txid = deposit.txid || 'N/A';
 
       totalAmount += netAmount;
@@ -1980,6 +1981,7 @@ async function checkRecentDeposits(chatId) {
       const depositInfo = {
         amount: netAmount,
         time: time,
+        date: depositDate, // Date 객체 저장
         txid: txid.substring(0, 20)
       };
 
@@ -2010,8 +2012,7 @@ async function checkRecentDeposits(chatId) {
 
       // 미기록 입금을 시트에 기록
       for (const deposit of newDeposits) {
-        const depositDate = new Date(deposit.time.split(' ')[0]);
-        await recordUSDTDeposit(deposit.amount, depositDate);
+        await recordUSDTDeposit(deposit.amount, deposit.date); // Date 객체 사용
       }
 
       message += `\n✅ <b>시트 기록 완료!</b>`;
