@@ -32,6 +32,11 @@ const COINONE_SECRET_KEY = process.env.COINONE_SECRET_KEY || '';
 let sheets;
 let auth;
 
+// 모니터링 설정
+let depositMonitoringActive = false;
+let lastCheckedDepositId = null;
+let monitoringChatId = null;
+
 async function initializeGoogleSheets() {
   try {
     const credentials = JSON.parse(GOOGLE_CREDENTIALS);
@@ -470,10 +475,10 @@ app.post('/webhook', async (req, res) => {
     const userName = message.from.first_name || 'Unknown';
     
     console.log(`메시지 수신: ${text} (${userName})`);
-    
+
     // 명령어 처리
-    const response = await processTelegramCommand(text, userId, userName);
-    
+    const response = await processTelegramCommand(text, chatId, userId, userName);
+
     // 텔레그램 봇으로 응답 전송
     await sendTelegramMessage(chatId, response);
     
@@ -485,7 +490,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // 텔레그램 명령어 처리
-async function processTelegramCommand(text, userId, userName) {
+async function processTelegramCommand(text, chatId, userId, userName) {
   const parts = text.split(' ');
   const command = parts[0].toLowerCase();
   
@@ -526,6 +531,13 @@ async function processTelegramCommand(text, userId, userName) {
         const upbitRes = await updateUpbitData();
         const coinoneRes = await updateCoinoneData();
         return `${upbitRes.message}\n${coinoneRes.message}`;
+      case '입금체크':
+      case '입금모니터링':
+      case '모니터링시작':
+        return await startDepositMonitoring(chatId);
+      case '모니터링중지':
+      case '입금체크중지':
+        return stopDepositMonitoring();
       case '대기':
       case '진행대기':
       case '진행중':
@@ -1233,6 +1245,108 @@ async function updateDailyDollar(rowIndex) {
     console.error('당일달러 계산 오류:', error);
   }
 }
+
+// ============================================
+// USDT 입금 실시간 모니터링
+// ============================================
+
+// 업비트 USDT 입금 체크
+async function checkUpbitDeposits() {
+  try {
+    const deposits = await getUpbitDeposits('USDT', 'ACCEPTED', 10);
+
+    if (!deposits || deposits.length === 0) {
+      return null;
+    }
+
+    // 가장 최근 입금 확인
+    const latestDeposit = deposits[0];
+
+    // 새로운 입금인지 체크
+    if (lastCheckedDepositId === null) {
+      lastCheckedDepositId = latestDeposit.uuid;
+      return null;
+    }
+
+    if (latestDeposit.uuid !== lastCheckedDepositId) {
+      lastCheckedDepositId = latestDeposit.uuid;
+      return latestDeposit;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('입금 체크 오류:', error);
+    return null;
+  }
+}
+
+// 입금 모니터링 시작
+async function startDepositMonitoring(chatId) {
+  if (depositMonitoringActive) {
+    return '이미 입금 모니터링이 실행 중입니다.';
+  }
+
+  depositMonitoringActive = true;
+  monitoringChatId = chatId;
+  lastCheckedDepositId = null;
+
+  // 초기 상태 설정 (현재까지의 입금은 무시)
+  const deposits = await getUpbitDeposits('USDT', 'ACCEPTED', 1);
+  if (deposits && deposits.length > 0) {
+    lastCheckedDepositId = deposits[0].uuid;
+  }
+
+  console.log('입금 모니터링 시작됨');
+  return '✅ 업비트 USDT 입금 모니터링을 시작합니다.\n새로운 입금이 감지되면 즉시 알려드립니다.';
+}
+
+// 입금 모니터링 중지
+function stopDepositMonitoring() {
+  if (!depositMonitoringActive) {
+    return '현재 실행 중인 모니터링이 없습니다.';
+  }
+
+  depositMonitoringActive = false;
+  monitoringChatId = null;
+  lastCheckedDepositId = null;
+
+  console.log('입금 모니터링 중지됨');
+  return '⏸️ 입금 모니터링을 중지했습니다.';
+}
+
+// 주기적으로 입금 체크 (30초마다)
+setInterval(async () => {
+  if (!depositMonitoringActive || !monitoringChatId) {
+    return;
+  }
+
+  const newDeposit = await checkUpbitDeposits();
+
+  if (newDeposit) {
+    const amount = parseFloat(newDeposit.amount);
+    const fee = parseFloat(newDeposit.fee) || 0;
+    const netAmount = amount - fee;
+    const txid = newDeposit.txid || 'N/A';
+    const network = newDeposit.net_type || 'Unknown';
+    const time = new Date(newDeposit.done_at).toLocaleString('ko-KR');
+
+    const message = `
+🚨 <b>새로운 USDT 입금 감지!</b>
+
+💰 <b>입금 금액</b>: ${amount.toFixed(2)} USDT
+💸 <b>수수료</b>: ${fee.toFixed(2)} USDT
+✅ <b>실제 입금</b>: ${netAmount.toFixed(2)} USDT
+🌐 <b>네트워크</b>: ${network}
+⏰ <b>입금 시간</b>: ${time}
+🔗 <b>TxID</b>: ${txid.substring(0, 20)}...
+
+입금이 완료되었습니다! 거래소에서 확인하세요.
+    `.trim();
+
+    await sendTelegramMessage(monitoringChatId, message);
+    console.log(`새 입금 알림 전송: ${netAmount.toFixed(2)} USDT`);
+  }
+}, 30000); // 30초마다 체크
 
 // 서버 시작
 app.listen(PORT, async () => {
