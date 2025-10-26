@@ -62,7 +62,7 @@ async function getAccountInfo(accountCode) {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: 'Daiiy!W2:Z'
+      range: '당일작업!W2:Z'
     });
     
     const data = response.data.values;
@@ -142,7 +142,7 @@ async function createWaitingStatus(accountCode, amount, foreignAmount, currencyT
     
     await sheets.spreadsheets.values.append({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: '당일 작업!A:T',
+      range: '당일작업!A:T',
       valueInputOption: 'RAW',
       resource: { values: [rowData] }
     });
@@ -161,7 +161,7 @@ async function processStatusChange(issueCode, command, value) {
     // 당일작업시트지에서 해당 발급코드 찾기
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: '당일 작업!A:T'
+      range: '당일작업!A:T'
     });
     
     const data = response.data.values;
@@ -208,7 +208,7 @@ async function processForeignDeposit(issueCode, amount, row) {
     // 외화입금날짜 설정
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!J${row}`,
+      range: `당일작업!J${row}`,
       valueInputOption: 'RAW',
       resource: { values: [[today]] }
     });
@@ -216,19 +216,19 @@ async function processForeignDeposit(issueCode, amount, row) {
     // 외화입금 설정
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!L${row}`,
+      range: `당일작업!L${row}`,
       valueInputOption: 'RAW',
       resource: { values: [[amount]] }
     });
     
     // 외화출금 계산 (HKD:-15, USD:-2)
-    const currencyType = await getCellValue('당일 작업!N' + row);
+    const currencyType = await getCellValue('당일작업!N' + row);
     const foreignWithdrawal = currencyType === 'HKD' ? 
       parseInt(amount) - 15 : parseInt(amount) - 2;
     
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!M${row}`,
+      range: `당일작업!M${row}`,
       valueInputOption: 'RAW',
       resource: { values: [[foreignWithdrawal]] }
     });
@@ -246,12 +246,12 @@ async function processProgress(issueCode, row) {
   try {
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!O${row}`,
+      range: `당일작업!O${row}`,
       valueInputOption: 'RAW',
       resource: { values: [['진행']] }
     });
     
-    const foreignWithdrawal = await getCellValue('당일 작업!M' + row);
+    const foreignWithdrawal = await getCellValue('당일작업!M' + row);
     return `코드 : ${issueCode} 금액 : ${foreignWithdrawal} 작업중!`;
     
   } catch (error) {
@@ -266,7 +266,7 @@ async function processRemainingDollar(issueCode, amount, row) {
     // 바낸달러 설정
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!P${row}`,
+      range: `당일작업!P${row}`,
       valueInputOption: 'RAW',
       resource: { values: [[amount]] }
     });
@@ -275,7 +275,7 @@ async function processRemainingDollar(issueCode, amount, row) {
     const finalDollar = parseInt(amount) - 1;
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!Q${row}`,
+      range: `당일작업!Q${row}`,
       valueInputOption: 'RAW',
       resource: { values: [[finalDollar]] }
     });
@@ -283,10 +283,10 @@ async function processRemainingDollar(issueCode, amount, row) {
     // 달러가격 업데이트
     await updateDollarPrice(row);
     
-    const bankInfo = await getCellValue('당일 작업!D' + row);
-    const name = await getCellValue('당일 작업!B' + row);
-    const withdrawal = await getCellValue('당일 작업!F' + row);
-    const dollarPrice = await getCellValue('당일 작업!S' + row);
+    const bankInfo = await getCellValue('당일작업!D' + row);
+    const name = await getCellValue('당일작업!B' + row);
+    const withdrawal = await getCellValue('당일작업!F' + row);
+    const dollarPrice = await getCellValue('당일작업!S' + row);
     
     return `코드 : ${issueCode} , 달러 ${finalDollar} 가격 : ${dollarPrice}\n${bankInfo} ${name} ${formatNumber(withdrawal)}원 입금요망`;
     
@@ -302,25 +302,25 @@ async function processDeposit(issueCode, amount, row) {
     // 입금 설정
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!E${row}`,
+      range: `당일작업!E${row}`,
       valueInputOption: 'RAW',
       resource: { values: [[amount]] }
     });
     
     // 수익 계산
-    const finalDollar = await getCellValue('당일 작업!Q' + row);
-    const dollarPrice = await getCellValue('당일 작업!S' + row);
-    const withdrawal = await getCellValue('당일 작업!F' + row);
+    const finalDollar = await getCellValue('당일작업!Q' + row);
+    const dollarPrice = await getCellValue('당일작업!S' + row);
+    const withdrawal = await getCellValue('당일작업!F' + row);
     
     const profit = Math.floor((finalDollar * dollarPrice - withdrawal) / 2);
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!G${row}`,
+      range: `당일작업!G${row}`,
       valueInputOption: 'RAW',
       resource: { values: [[profit]] }
     });
     
-    const name = await getCellValue('당일 작업!B' + row);
+    const name = await getCellValue('당일작업!B' + row);
     return `코드 : ${issueCode} ${name} ${formatNumber(profit)}원 입금요망`;
     
   } catch (error) {
@@ -335,7 +335,7 @@ async function processSettlement(issueCode, amount, row) {
     // 수익입금 설정
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!H${row}`,
+      range: `당일작업!H${row}`,
       valueInputOption: 'RAW',
       resource: { values: [[amount]] }
     });
@@ -343,12 +343,12 @@ async function processSettlement(issueCode, amount, row) {
     // 정산완료 설정
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!I${row}`,
+      range: `당일작업!I${row}`,
       valueInputOption: 'RAW',
       resource: { values: [['정산완료']] }
     });
     
-    const name = await getCellValue('당일 작업!B' + row);
+    const name = await getCellValue('당일작업!B' + row);
     return `코드:${issueCode} ${name} ${formatNumber(amount)}원 정산완료`;
     
   } catch (error) {
@@ -362,12 +362,12 @@ async function processSettlementComplete(issueCode, row) {
   try {
     await sheets.spreadsheets.values.update({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `당일 작업!I${row}`,
+      range: `당일작업!I${row}`,
       valueInputOption: 'RAW',
       resource: { values: [['정산완료']] }
     });
     
-    const name = await getCellValue('당일 작업!B' + row);
+    const name = await getCellValue('당일작업!B' + row);
     return `코드:${issueCode} ${name} 정산완료`;
     
   } catch (error) {
@@ -400,7 +400,7 @@ async function updateDollarPrice(row) {
     if (todayDollarPrice) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: GOOGLE_SHEET_ID,
-        range: `당일 작업!S${row}`,
+        range: `당일작업!S${row}`,
         valueInputOption: 'RAW',
         resource: { values: [[todayDollarPrice]] }
       });
