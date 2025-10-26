@@ -27,6 +27,8 @@ const UPBIT_ACCESS_KEY = process.env.UPBIT_ACCESS_KEY || '';
 const UPBIT_SECRET_KEY = process.env.UPBIT_SECRET_KEY || '';
 const COINONE_ACCESS_TOKEN = process.env.COINONE_ACCESS_TOKEN || '';
 const COINONE_SECRET_KEY = process.env.COINONE_SECRET_KEY || '';
+const BINANCE_API_KEY = process.env.BINANCE_API_KEY || '';
+const BINANCE_SECRET_KEY = process.env.BINANCE_SECRET_KEY || '';
 
 // 구글 시트 API 설정
 let sheets;
@@ -40,6 +42,12 @@ let monitoringChatId = null;
 // 자동 거래 설정
 let autoTradingActive = false;
 let activeOrders = new Map(); // uuid -> { amount, chatId, createdAt, retryCount }
+
+// 바이낸스 모니터링 설정
+let binanceETHMonitoringActive = false;
+let lastCheckedBinanceDepositId = null;
+let binanceMonitoringChatId = null;
+let binanceETHOrders = new Map(); // orderId -> { amount, chatId, createdAt, retryCount, currentPrice }
 
 async function initializeGoogleSheets() {
   try {
@@ -507,6 +515,8 @@ async function processTelegramCommand(text, chatId, userId, userName) {
     
     // 2. 상태별 명령어 처리
     switch (command) {
+      case '전체작업':
+        return await getAllWorkList();
       case '대기목록':
         return await getWaitingList();
       case '진행대기목록':
@@ -586,6 +596,134 @@ async function processTelegramCommand(text, chatId, userId, userName) {
 }
 
 // 상태별 목록 조회 함수들
+// 전체 작업 목록 조회
+async function getAllWorkList() {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '작업 내역이 없습니다.';
+    }
+
+    let result = '📊 <b>전체 작업 현황</b>\n\n';
+
+    // 각 상태별로 데이터 수집
+    const categories = {
+      waiting: [],
+      progressWaiting: [],
+      progress: [],
+      settlementWaiting: [],
+      settlement: [],
+      complete: []
+    };
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const date = row[0] || '';
+      const issueCode = row[17] || '';
+      const withdrawal = row[5] || '0';
+      const foreignAmount = row[10] || '0';
+      const currency = row[13] || '';
+      const deposit = row[4] || '0';
+      const profit = row[6] || '0';
+      const finalDollar = row[16] || '0';
+      const dollarPrice = row[18] || '0';
+
+      // 대기
+      if (!row[9] && !row[11] && !row[14]) {
+        categories.waiting.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
+        );
+      }
+      // 진행대기
+      else if (row[11] && !row[14]) {
+        categories.progressWaiting.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
+        );
+      }
+      // 진행중
+      else if (row[14] === '진행' && !row[16]) {
+        categories.progress.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
+        );
+      }
+      // 정산대기
+      else if (row[16] && !row[4]) {
+        categories.settlementWaiting.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, 최종달러:${finalDollar}, 달러가격:${dollarPrice}`
+        );
+      }
+      // 정산중
+      else if (row[6] && !row[8]) {
+        categories.settlement.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
+        );
+      }
+      // 정산완료
+      else if (row[8] === '정산완료') {
+        categories.complete.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
+        );
+      }
+    }
+
+    // 대기
+    if (categories.waiting.length > 0) {
+      result += `🟡 <b>대기 (${categories.waiting.length}건)</b>\n`;
+      result += categories.waiting.join('\n') + '\n\n';
+    }
+
+    // 진행대기
+    if (categories.progressWaiting.length > 0) {
+      result += `🟠 <b>진행대기 (${categories.progressWaiting.length}건)</b>\n`;
+      result += categories.progressWaiting.join('\n') + '\n\n';
+    }
+
+    // 진행중
+    if (categories.progress.length > 0) {
+      result += `🔵 <b>진행중 (${categories.progress.length}건)</b>\n`;
+      result += categories.progress.join('\n') + '\n\n';
+    }
+
+    // 정산대기
+    if (categories.settlementWaiting.length > 0) {
+      result += `🟣 <b>정산대기 (${categories.settlementWaiting.length}건)</b>\n`;
+      result += categories.settlementWaiting.join('\n') + '\n\n';
+    }
+
+    // 정산중
+    if (categories.settlement.length > 0) {
+      result += `🟢 <b>정산중 (${categories.settlement.length}건)</b>\n`;
+      result += categories.settlement.join('\n') + '\n\n';
+    }
+
+    // 정산완료
+    if (categories.complete.length > 0) {
+      result += `✅ <b>정산완료 (${categories.complete.length}건)</b>\n`;
+      result += categories.complete.join('\n') + '\n\n';
+    }
+
+    // 모든 항목이 비어있는 경우
+    if (Object.values(categories).every(arr => arr.length === 0)) {
+      return '작업 내역이 없습니다.';
+    }
+
+    // 총 작업 수 추가
+    const totalCount = Object.values(categories).reduce((sum, arr) => sum + arr.length, 0);
+    result += `📌 <b>총 ${totalCount}건</b>`;
+
+    return result;
+
+  } catch (error) {
+    console.error('전체 작업 목록 조회 오류:', error);
+    return '전체 작업 목록 조회 중 오류가 발생했습니다.';
+  }
+}
+
 async function getWaitingList() {
   try {
     const response = await sheets.spreadsheets.values.get({
@@ -1237,6 +1375,167 @@ async function getCoinoneKRWTransactions() {
 }
 
 // ============================================
+// 바이낸스 API 연동
+// ============================================
+
+// 바이낸스 API 서명 생성
+function generateBinanceSignature(queryString) {
+  return crypto
+    .createHmac('sha256', BINANCE_SECRET_KEY)
+    .update(queryString)
+    .digest('hex');
+}
+
+// 바이낸스 ETH 입금 내역 조회
+async function getBinanceETHDeposits(limit = 10) {
+  try {
+    const timestamp = Date.now();
+    const queryString = `coin=ETH&status=1&timestamp=${timestamp}`;
+    const signature = generateBinanceSignature(queryString);
+
+    const response = await axios.get('https://api.binance.com/sapi/v1/capital/deposit/hisrec', {
+      params: {
+        coin: 'ETH',
+        status: 1, // 1 = success
+        timestamp,
+        signature
+      },
+      headers: {
+        'X-MBX-APIKEY': BINANCE_API_KEY
+      }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('바이낸스 ETH 입금 조회 오류:', error.response?.data || error.message);
+    return [];
+  }
+}
+
+// 바이낸스 현재가 조회
+async function getBinanceCurrentPrice(symbol = 'ETHUSDT') {
+  try {
+    const response = await axios.get(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`);
+    return parseFloat(response.data.price);
+  } catch (error) {
+    console.error('바이낸스 현재가 조회 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// 바이낸스 ETH 잔고 조회
+async function getBinanceETHBalance() {
+  try {
+    const timestamp = Date.now();
+    const queryString = `timestamp=${timestamp}`;
+    const signature = generateBinanceSignature(queryString);
+
+    const response = await axios.get('https://api.binance.com/api/v3/account', {
+      params: { timestamp, signature },
+      headers: { 'X-MBX-APIKEY': BINANCE_API_KEY }
+    });
+
+    const ethBalance = response.data.balances.find(b => b.asset === 'ETH');
+    return ethBalance ? parseFloat(ethBalance.free) : 0;
+  } catch (error) {
+    console.error('바이낸스 ETH 잔고 조회 오류:', error.response?.data || error.message);
+    return 0;
+  }
+}
+
+// 바이낸스 지정가 주문 (ETH → USDT)
+async function placeBinanceLimitOrder(symbol, side, quantity, price) {
+  try {
+    const timestamp = Date.now();
+    const queryString = `symbol=${symbol}&side=${side}&type=LIMIT&timeInForce=GTC&quantity=${quantity}&price=${price}&timestamp=${timestamp}`;
+    const signature = generateBinanceSignature(queryString);
+
+    const response = await axios.post('https://api.binance.com/api/v3/order', null, {
+      params: {
+        symbol,
+        side, // 'BUY' or 'SELL'
+        type: 'LIMIT',
+        timeInForce: 'GTC',
+        quantity,
+        price,
+        timestamp,
+        signature
+      },
+      headers: { 'X-MBX-APIKEY': BINANCE_API_KEY }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('바이낸스 주문 생성 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// 바이낸스 주문 상태 조회
+async function getBinanceOrderStatus(symbol, orderId) {
+  try {
+    const timestamp = Date.now();
+    const queryString = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
+    const signature = generateBinanceSignature(queryString);
+
+    const response = await axios.get('https://api.binance.com/api/v3/order', {
+      params: { symbol, orderId, timestamp, signature },
+      headers: { 'X-MBX-APIKEY': BINANCE_API_KEY }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('바이낸스 주문 상태 조회 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// 바이낸스 주문 취소
+async function cancelBinanceOrder(symbol, orderId) {
+  try {
+    const timestamp = Date.now();
+    const queryString = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
+    const signature = generateBinanceSignature(queryString);
+
+    const response = await axios.delete('https://api.binance.com/api/v3/order', {
+      params: { symbol, orderId, timestamp, signature },
+      headers: { 'X-MBX-APIKEY': BINANCE_API_KEY }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('바이낸스 주문 취소 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// 바이낸스 USDT 출금 (업비트/코인원으로)
+async function withdrawBinanceUSDT(address, amount, network = 'TRC20') {
+  try {
+    const timestamp = Date.now();
+    const queryString = `coin=USDT&network=${network}&address=${address}&amount=${amount}&timestamp=${timestamp}`;
+    const signature = generateBinanceSignature(queryString);
+
+    const response = await axios.post('https://api.binance.com/sapi/v1/capital/withdraw/apply', null, {
+      params: {
+        coin: 'USDT',
+        network,
+        address,
+        amount,
+        timestamp,
+        signature
+      },
+      headers: { 'X-MBX-APIKEY': BINANCE_API_KEY }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('바이낸스 USDT 출금 오류:', error.response?.data || error.message);
+    return null;
+  }
+}
+
+// ============================================
 // 출금내역 시트 데이터 처리
 // ============================================
 
@@ -1477,6 +1776,59 @@ async function updateDailyDollar(rowIndex) {
 // USDT 입금 실시간 모니터링
 // ============================================
 
+// 출금내역시트에 USDT 입금 기록 (업비트 A열, B열)
+async function recordUSDTDeposit(amount, depositDate) {
+  try {
+    const date = new Date(depositDate).toLocaleDateString('ko-KR');
+
+    // 출금내역시트 읽기
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '출금내역시트!A:B'
+    });
+
+    const sheetData = response.data.values || [];
+    let rowIndex = -1;
+
+    // 해당 날짜가 이미 있는지 확인 (A열에서 날짜 찾기)
+    for (let i = 1; i < sheetData.length; i++) {
+      if (sheetData[i][0] === date) {
+        rowIndex = i + 1; // 1-based index
+        break;
+      }
+    }
+
+    if (rowIndex === -1) {
+      // 새 행 추가: A열(입금날짜), B열(입금달러)
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: '출금내역시트!A:B',
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[date, Math.round(amount)]]
+        }
+      });
+      console.log(`출금내역시트 신규 입금 기록: ${date}, ${Math.round(amount)} USDT`);
+    } else {
+      // 기존 행의 B열 업데이트 (기존 값에 누적)
+      const existingAmount = parseFloat(sheetData[rowIndex - 1][1]) || 0;
+      const newAmount = existingAmount + amount;
+
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: `출금내역시트!B${rowIndex}`,
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[Math.round(newAmount)]]
+        }
+      });
+      console.log(`출금내역시트 입금 누적: ${date}, ${Math.round(newAmount)} USDT (기존: ${Math.round(existingAmount)})`);
+    }
+  } catch (error) {
+    console.error('출금내역시트 입금 기록 오류:', error);
+  }
+}
+
 // 업비트 USDT 입금 체크
 async function checkUpbitDeposits() {
   try {
@@ -1650,6 +2002,9 @@ setInterval(async () => {
 
     await sendTelegramMessage(monitoringChatId, message);
     console.log(`새 입금 알림 전송: ${netAmount.toFixed(2)} USDT`);
+
+    // 출금내역시트에 입금 기록 (A열: 입금날짜, B열: 입금달러)
+    await recordUSDTDeposit(netAmount, newDeposit.done_at);
 
     // 자동 거래 활성화된 경우 즉시 판매 시작
     if (autoTradingActive && netAmount > 0) {
