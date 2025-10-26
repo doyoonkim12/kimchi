@@ -2218,4 +2218,18 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// 서버 IP 확인용 엔드포인트 (업비트 IP 등록을 위해)
+app.get('/my-ip', async (req, res) => {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    res.status(200).json({
+      serverIP: response.data.ip,
+      requestIP: req.ip,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'IP 조회 실패', message: error.message });
+  }
+});
+
 module.exports = app;
