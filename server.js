@@ -62,14 +62,21 @@ async function getAccountInfo(accountCode) {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: '당일작업!W2:Z'
+      range: '당일작업!W:Z'
     });
-    
+
     const data = response.data.values;
-    if (!data || data.length < 2) return null;
-    
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][3] === accountCode) { // Z열 (계좌코드)
+    if (!data || data.length === 0) {
+      console.log('계좌정보 데이터가 없습니다.');
+      return null;
+    }
+
+    console.log(`계좌코드 검색 중: ${accountCode}`);
+    console.log(`계좌정보 데이터 행 수: ${data.length}`);
+
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] && data[i][3] === accountCode) { // Z열 (계좌코드)
+        console.log(`계좌정보 찾음: ${JSON.stringify(data[i])}`);
         return {
           name: data[i][0], // W열 (이름)
           platform: data[i][1], // X열 (플랫폼)
@@ -77,6 +84,7 @@ async function getAccountInfo(accountCode) {
         };
       }
     }
+    console.log(`계좌코드 ${accountCode}를 찾을 수 없습니다.`);
     return null;
   } catch (error) {
     console.error('계좌정보 조회 오류:', error);
@@ -116,7 +124,7 @@ async function createWaitingStatus(accountCode, amount, foreignAmount, currencyT
     const normalizedCurrency = normalizeCurrency(currencyType);
     
     // 당일작업시트지에 데이터 입력
-    const today = new Date();
+    const today = new Date().toLocaleDateString('ko-KR');
     const rowData = [
       today, // 입금날짜
       accountData.name, // 이름
@@ -139,14 +147,18 @@ async function createWaitingStatus(accountCode, amount, foreignAmount, currencyT
       '', // 달러가격
       accountCode // 계좌코드
     ];
-    
-    await sheets.spreadsheets.values.append({
+
+    console.log('시트에 저장할 데이터:', rowData);
+
+    const appendResult = await sheets.spreadsheets.values.append({
       spreadsheetId: GOOGLE_SHEET_ID,
       range: '당일작업!A:T',
       valueInputOption: 'RAW',
       resource: { values: [rowData] }
     });
-    
+
+    console.log('데이터 저장 완료:', appendResult.data);
+
     return `정상등록 되었습니다.\n발급코드 : ${issueCode}`;
     
   } catch (error) {
