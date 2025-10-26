@@ -540,30 +540,274 @@ async function processTelegramCommand(text, userId, userName) {
   }
 }
 
-// 상태별 목록 조회 함수들 (구현 필요)
+// 상태별 목록 조회 함수들
 async function getWaitingList() {
-  // 구현 예정
-  return '대기 목록 조회 기능을 구현 중입니다.';
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '대기 중인 작업이 없습니다.';
+    }
+
+    const waitingItems = [];
+
+    // 헤더 제외하고 데이터 조회 (i=1부터 시작)
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+
+      // 대기 상태 조건: 외화입금날짜(J열=9), 외화입금(L열=11), 진행여부(O열=14)가 모두 비어있음
+      const isWaiting = !row[9] && !row[11] && !row[14];
+
+      if (isWaiting) {
+        const date = row[0] || ''; // A열: 입금날짜
+        const issueCode = row[17] || ''; // R열: 발급코드
+        const withdrawal = row[5] || '0'; // F열: 출금
+        const foreignAmount = row[10] || '0'; // K열: 외화
+        const currency = row[13] || ''; // N열: 종류
+
+        waitingItems.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}, 해외계좌입금전`
+        );
+      }
+    }
+
+    if (waitingItems.length === 0) {
+      return '대기 중인 작업이 없습니다.';
+    }
+
+    return `📋 대기 목록\n\n` + waitingItems.join('\n');
+
+  } catch (error) {
+    console.error('대기 목록 조회 오류:', error);
+    return '대기 목록 조회 중 오류가 발생했습니다.';
+  }
 }
 
 async function getProgressWaitingList() {
-  return '진행대기 목록 조회 기능을 구현 중입니다.';
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '진행대기 중인 작업이 없습니다.';
+    }
+
+    const items = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+
+      // 진행대기 상태: 외화입금(L열=11)이 있고, 진행여부(O열=14)가 비어있음
+      const isProgressWaiting = row[11] && !row[14];
+
+      if (isProgressWaiting) {
+        const date = row[0] || '';
+        const issueCode = row[17] || '';
+        const withdrawal = row[5] || '0';
+        const foreignAmount = row[10] || '0';
+        const currency = row[13] || '';
+
+        items.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}, 거래소입금전`
+        );
+      }
+    }
+
+    if (items.length === 0) {
+      return '진행대기 중인 작업이 없습니다.';
+    }
+
+    return `📋 진행대기 목록\n\n` + items.join('\n');
+
+  } catch (error) {
+    console.error('진행대기 목록 조회 오류:', error);
+    return '진행대기 목록 조회 중 오류가 발생했습니다.';
+  }
 }
 
 async function getProgressList() {
-  return '진행중 목록 조회 기능을 구현 중입니다.';
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '진행 중인 작업이 없습니다.';
+    }
+
+    const items = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+
+      // 진행중 상태: 진행여부(O열=14)가 "진행"이고, 최종달러(Q열=16)가 비어있음
+      const isProgress = row[14] === '진행' && !row[16];
+
+      if (isProgress) {
+        const date = row[0] || '';
+        const issueCode = row[17] || '';
+        const withdrawal = row[5] || '0';
+        const foreignAmount = row[10] || '0';
+        const currency = row[13] || '';
+
+        items.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}, 작업중`
+        );
+      }
+    }
+
+    if (items.length === 0) {
+      return '진행 중인 작업이 없습니다.';
+    }
+
+    return `📋 진행 중 목록\n\n` + items.join('\n');
+
+  } catch (error) {
+    console.error('진행중 목록 조회 오류:', error);
+    return '진행중 목록 조회 중 오류가 발생했습니다.';
+  }
 }
 
 async function getSettlementWaitingList() {
-  return '정산대기 목록 조회 기능을 구현 중입니다.';
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '정산대기 중인 작업이 없습니다.';
+    }
+
+    const items = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+
+      // 정산대기 상태: 최종달러(Q열=16)가 있고, 입금(E열=4)이 비어있음
+      const isSettlementWaiting = row[16] && !row[4];
+
+      if (isSettlementWaiting) {
+        const date = row[0] || '';
+        const issueCode = row[17] || '';
+        const withdrawal = row[5] || '0';
+        const finalDollar = row[16] || '0';
+        const dollarPrice = row[18] || '0';
+
+        items.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, 최종달러:${finalDollar}, 달러가격:${dollarPrice}`
+        );
+      }
+    }
+
+    if (items.length === 0) {
+      return '정산대기 중인 작업이 없습니다.';
+    }
+
+    return `📋 정산대기 목록\n\n` + items.join('\n');
+
+  } catch (error) {
+    console.error('정산대기 목록 조회 오류:', error);
+    return '정산대기 목록 조회 중 오류가 발생했습니다.';
+  }
 }
 
 async function getSettlementList() {
-  return '정산중 목록 조회 기능을 구현 중입니다.';
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '정산 중인 작업이 없습니다.';
+    }
+
+    const items = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+
+      // 정산중 상태: 수익(G열=6)이 있고, 정산(I열=8)이 비어있음
+      const isSettlement = row[6] && !row[8];
+
+      if (isSettlement) {
+        const date = row[0] || '';
+        const issueCode = row[17] || '';
+        const deposit = row[4] || '0';
+        const profit = row[6] || '0';
+
+        items.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
+        );
+      }
+    }
+
+    if (items.length === 0) {
+      return '정산 중인 작업이 없습니다.';
+    }
+
+    return `📋 정산 중 목록\n\n` + items.join('\n');
+
+  } catch (error) {
+    console.error('정산중 목록 조회 오류:', error);
+    return '정산중 목록 조회 중 오류가 발생했습니다.';
+  }
 }
 
 async function getSettlementCompleteList() {
-  return '정산완료 목록 조회 기능을 구현 중입니다.';
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '정산완료된 작업이 없습니다.';
+    }
+
+    const items = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+
+      // 정산완료 상태: 정산(I열=8)이 "정산완료"
+      const isComplete = row[8] === '정산완료';
+
+      if (isComplete) {
+        const date = row[0] || '';
+        const issueCode = row[17] || '';
+        const deposit = row[4] || '0';
+        const profit = row[6] || '0';
+
+        items.push(
+          `${date}, 코드:${issueCode}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
+        );
+      }
+    }
+
+    if (items.length === 0) {
+      return '정산완료된 작업이 없습니다.';
+    }
+
+    return `📋 정산완료 목록\n\n` + items.join('\n');
+
+  } catch (error) {
+    console.error('정산완료 목록 조회 오류:', error);
+    return '정산완료 목록 조회 중 오류가 발생했습니다.';
+  }
 }
 
 async function getCompleteList() {
