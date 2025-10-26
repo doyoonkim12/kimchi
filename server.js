@@ -408,11 +408,11 @@ async function processSettlementComplete(issueCode, row) {
 // 달러가격 업데이트
 async function updateDollarPrice(row) {
   try {
-    // 출금내역 시트에서 당일달러 가격 가져오기
+    // 출금내역시트에서 당일달러 가격 가져오기
     const today = new Date();
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: '출금내역!A:P'
+      range: '출금내역시트!A:P'
     });
 
     const data = response.data.values;
@@ -1359,13 +1359,13 @@ async function updateCoinoneData() {
   }
 }
 
-// 출금내역 시트 업데이트
+// 출금내역시트 업데이트
 async function updateWithdrawalSheet(exchange, date, data) {
   try {
-    // 출금내역 시트 읽기
+    // 출금내역시트 읽기
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: '출금내역!A:P'
+      range: '출금내역시트!A:P'
     });
 
     const sheetData = response.data.values || [];
@@ -1408,7 +1408,7 @@ async function updateWithdrawalSheet(exchange, date, data) {
 
       await sheets.spreadsheets.values.append({
         spreadsheetId: GOOGLE_SHEET_ID,
-        range: '출금내역!A:P',
+        range: '출금내역시트!A:P',
         valueInputOption: 'RAW',
         resource: { values: [newRow] }
       });
@@ -1419,7 +1419,7 @@ async function updateWithdrawalSheet(exchange, date, data) {
 
       await sheets.spreadsheets.values.update({
         spreadsheetId: GOOGLE_SHEET_ID,
-        range: `출금내역!${startCol}${rowIndex}:${endCol}${rowIndex}`,
+        range: `출금내역시트!${startCol}${rowIndex}:${endCol}${rowIndex}`,
         valueInputOption: 'RAW',
         resource: {
           values: [[
@@ -1440,7 +1440,7 @@ async function updateWithdrawalSheet(exchange, date, data) {
 
     console.log(`${exchange} 데이터 업데이트 완료: ${date}`);
   } catch (error) {
-    console.error('출금내역 시트 업데이트 오류:', error);
+    console.error('출금내역시트 업데이트 오류:', error);
   }
 }
 
@@ -1449,7 +1449,7 @@ async function updateDailyDollar(rowIndex) {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: `출금내역!G${rowIndex}:O${rowIndex}`
+      range: `출금내역시트!G${rowIndex}:O${rowIndex}`
     });
 
     if (response.data.values && response.data.values.length > 0) {
@@ -1463,7 +1463,7 @@ async function updateDailyDollar(rowIndex) {
 
       await sheets.spreadsheets.values.update({
         spreadsheetId: GOOGLE_SHEET_ID,
-        range: `출금내역!P${rowIndex}`,
+        range: `출금내역시트!P${rowIndex}`,
         valueInputOption: 'RAW',
         resource: { values: [[dailyDollar]] }
       });
