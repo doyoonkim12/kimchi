@@ -553,6 +553,8 @@ async function processTelegramCommand(text, chatId, userId, userName) {
       case '모니터링중지':
       case '입금체크중지':
         return stopDepositMonitoring();
+      case '모니터링확인':
+        return await checkRecentDeposits(chatId);
       case '자동거래시작':
       case '자동판매시작':
       case '오토트레이딩':
@@ -1891,6 +1893,113 @@ function stopDepositMonitoring() {
 
   console.log('입금 모니터링 중지됨');
   return '⏸️ 입금 모니터링을 중지했습니다.';
+}
+
+// 최근 6시간 입금 내역 확인 및 시트 기록
+async function checkRecentDeposits(chatId) {
+  try {
+    // 6시간 전 timestamp 계산
+    const sixHoursAgo = Date.now() - (6 * 60 * 60 * 1000);
+
+    // 업비트에서 최근 입금 내역 조회
+    const deposits = await getUpbitDeposits('USDT', 'ACCEPTED', 100);
+
+    if (!deposits || deposits.length === 0) {
+      return '최근 6시간 이내 입금 내역이 없습니다.';
+    }
+
+    // 6시간 이내 입금만 필터링
+    const recentDeposits = deposits.filter(deposit => {
+      const depositTime = new Date(deposit.done_at).getTime();
+      return depositTime >= sixHoursAgo;
+    });
+
+    if (recentDeposits.length === 0) {
+      return '최근 6시간 이내 입금 내역이 없습니다.';
+    }
+
+    // 출금내역시트에서 오늘 날짜의 기록 확인
+    const today = new Date().toLocaleDateString('ko-KR');
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '출금내역시트!A:B'
+    });
+
+    const sheetData = response.data.values || [];
+    let todayRecorded = 0;
+
+    for (let i = 1; i < sheetData.length; i++) {
+      if (sheetData[i][0] === today) {
+        todayRecorded = parseFloat(sheetData[i][1]) || 0;
+        break;
+      }
+    }
+
+    // 입금 내역 처리
+    let totalAmount = 0;
+    let newDeposits = [];
+    let alreadyRecorded = [];
+
+    for (const deposit of recentDeposits) {
+      const amount = parseFloat(deposit.amount);
+      const fee = parseFloat(deposit.fee) || 0;
+      const netAmount = amount - fee;
+      const time = new Date(deposit.done_at).toLocaleString('ko-KR');
+      const txid = deposit.txid || 'N/A';
+
+      totalAmount += netAmount;
+
+      const depositInfo = {
+        amount: netAmount,
+        time: time,
+        txid: txid.substring(0, 20)
+      };
+
+      newDeposits.push(depositInfo);
+    }
+
+    // 시트에 미기록된 입금이 있는지 확인
+    const notRecorded = Math.round(totalAmount - todayRecorded);
+
+    let message = '📊 <b>최근 6시간 입금 내역</b>\n\n';
+    message += `🕐 <b>조회 시각</b>: ${new Date().toLocaleString('ko-KR')}\n`;
+    message += `📝 <b>총 입금 건수</b>: ${recentDeposits.length}건\n\n`;
+
+    // 입금 내역 상세
+    newDeposits.forEach((deposit, index) => {
+      message += `${index + 1}. 💰 ${deposit.amount.toFixed(2)} USDT\n`;
+      message += `   ⏰ ${deposit.time}\n`;
+      message += `   🔗 ${deposit.txid}...\n\n`;
+    });
+
+    message += `━━━━━━━━━━━━━━━━\n`;
+    message += `💵 <b>총 입금액</b>: ${totalAmount.toFixed(2)} USDT\n`;
+    message += `📋 <b>시트 기록</b>: ${todayRecorded} USDT\n`;
+
+    if (notRecorded > 0) {
+      message += `⚠️ <b>미기록 금액</b>: ${notRecorded} USDT\n\n`;
+      message += `🔄 <b>미기록 입금을 시트에 추가합니다...</b>`;
+
+      // 미기록 입금을 시트에 기록
+      for (const deposit of newDeposits) {
+        const depositDate = new Date(deposit.time.split(' ')[0]);
+        await recordUSDTDeposit(deposit.amount, depositDate);
+      }
+
+      message += `\n✅ <b>시트 기록 완료!</b>`;
+    } else if (notRecorded < 0) {
+      message += `⚠️ <b>주의</b>: 시트에 ${Math.abs(notRecorded)} USDT가 초과 기록되어 있습니다.\n`;
+    } else {
+      message += `✅ <b>모든 입금이 시트에 정상 기록되었습니다.</b>`;
+    }
+
+    await sendTelegramMessage(chatId, message);
+    return message;
+
+  } catch (error) {
+    console.error('최근 입금 확인 오류:', error);
+    return '⚠️ 최근 입금 확인 중 오류가 발생했습니다.';
+  }
 }
 
 // ============================================
