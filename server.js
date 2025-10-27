@@ -186,7 +186,13 @@ async function createWaitingStatus(accountCode, amount, foreignAmount, currencyT
 
     console.log('데이터 저장 완료:', appendResult.data);
 
-    return `정상등록 되었습니다.\n발급코드 : ${issueCode}\n\n📌 <b>다음 단계</b>:\n${issueCode} 외화입금 [입금된금액]`;
+    return `✅ <b>정상등록 되었습니다</b>\n\n` +
+           `📋 <b>등록 정보</b>\n` +
+           `발급코드: ${issueCode}\n` +
+           `계좌: ${accountCode}\n` +
+           `출금: ${formatNumber(amount)}원\n` +
+           `외화: ${foreignAmount} ${normalizedCurrency}\n\n` +
+           `📌 <b>다음 단계</b>:\n${issueCode} 외화입금 [입금된금액]`;
 
   } catch (error) {
     console.error('대기상태 생성 오류:', error);
@@ -524,17 +530,22 @@ async function processTelegramCommand(text, chatId, userId, userName) {
 
         // 각 줄이 4개 파트로 구성된 등록 명령인지 확인
         if (lineParts.length === 4 && !isNaN(lineParts[1]) && !isNaN(lineParts[2])) {
-          const result = await createWaitingStatus(lineParts[0], lineParts[1], lineParts[2], lineParts[3]);
+          const accountCode = lineParts[0];
+          const withdrawal = lineParts[1];
+          const foreignAmount = lineParts[2];
+          const currencyType = lineParts[3];
+
+          const result = await createWaitingStatus(accountCode, withdrawal, foreignAmount, currencyType);
 
           if (result.includes('정상등록')) {
             successCount++;
             // 발급코드 추출
             const codeMatch = result.match(/발급코드 : (\d+)/);
             const code = codeMatch ? codeMatch[1] : '?';
-            results.push(`${i + 1}. ✅ ${lineParts[0]} (코드: ${code})`);
+            results.push(`${i + 1}. ✅ 코드: ${code} | ${accountCode} ${formatNumber(withdrawal)}원 ${foreignAmount} ${currencyType}`);
           } else {
             failCount++;
-            results.push(`${i + 1}. ❌ ${lineParts[0]} - ${result}`);
+            results.push(`${i + 1}. ❌ ${accountCode} - ${result}`);
           }
         } else {
           failCount++;
