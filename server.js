@@ -601,6 +601,9 @@ async function processTelegramCommand(text, chatId, userId, userName) {
         return stopDepositMonitoring();
       case '모니터링확인':
         return await checkRecentDeposits(chatId);
+      case '업비트확인':
+      case '판매확인':
+        return await checkUpbitSales(chatId);
       case '서버아이피':
       case 'ip확인':
       case '아이피':
@@ -2067,6 +2070,136 @@ async function recordUSDTSale(salesDollar, salesAmount) {
   } catch (error) {
     console.error('출금내역시트 판매 기록 오류:', error);
     return { success: false, message: '⚠️ 판매 기록 중 오류가 발생했습니다.' };
+  }
+}
+
+// 업비트 판매 내역 확인 및 시트 자동 기록
+async function checkUpbitSales(chatId) {
+  try {
+    const today = new Date().toLocaleDateString('ko-KR');
+
+    // 오늘 완료된 판매 주문 조회
+    const orders = await getUpbitOrders('KRW-USDT', 'done', 100);
+
+    if (!orders || orders.length === 0) {
+      return '⚠️ 최근 판매 내역이 없습니다.';
+    }
+
+    // 오늘 날짜 주문만 필터링
+    const todayOrders = orders.filter(order => {
+      const orderDate = new Date(order.created_at).toLocaleDateString('ko-KR');
+      return orderDate === today && order.side === 'ask'; // ask = 매도(판매)
+    });
+
+    if (todayOrders.length === 0) {
+      return `📊 오늘(${today}) 판매 내역이 없습니다.`;
+    }
+
+    // 출금내역시트에서 오늘 날짜 확인
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '출금내역시트!A:G'
+    });
+
+    const sheetData = response.data.values || [];
+    let rowIndex = -1;
+
+    for (let i = 1; i < sheetData.length; i++) {
+      if (sheetData[i][0] === today) {
+        rowIndex = i + 1;
+        break;
+      }
+    }
+
+    // 판매 데이터 집계
+    let totalSalesDollar = 0;
+    let totalSalesAmount = 0;
+
+    for (const order of todayOrders) {
+      const volume = parseFloat(order.volume) || 0; // 판매한 USDT 수량
+      const price = parseFloat(order.price) || 0;   // 판매 단가
+      const amount = volume * price;                 // 판매 금액
+
+      totalSalesDollar += volume;
+      totalSalesAmount += amount;
+    }
+
+    // 출금액 = 판매금액 - 1000원
+    const withdrawalAmount = Math.round(totalSalesAmount - 1000);
+
+    // 평균달러 = 출금액 ÷ 판매달러
+    const averagePrice = Math.round(withdrawalAmount / totalSalesDollar);
+
+    if (rowIndex === -1) {
+      // 신규 행 추가
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: '출금내역시트!A:G',
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[
+            today,                              // A열: 입금날짜
+            '',                                 // B열: 입금달러 (비워둠)
+            Math.round(totalSalesDollar),      // C열: 판매달러
+            Math.round(totalSalesAmount),      // D열: 판매금액
+            today,                              // E열: 출금날짜
+            withdrawalAmount,                   // F열: 출금액
+            averagePrice                        // G열: 평균달러
+          ]]
+        }
+      });
+
+      return `✅ <b>업비트 판매 기록 완료!</b>\n\n` +
+             `📅 날짜: ${today}\n` +
+             `💰 판매달러: ${Math.round(totalSalesDollar)} USDT\n` +
+             `💵 판매금액: ${Math.round(totalSalesAmount).toLocaleString()}원\n` +
+             `📤 출금액: ${withdrawalAmount.toLocaleString()}원\n` +
+             `📊 평균달러: ${averagePrice.toLocaleString()}원\n` +
+             `🔢 총 거래 건수: ${todayOrders.length}건`;
+    } else {
+      // 기존 행 업데이트 (누적)
+      const existingSalesDollar = parseFloat(sheetData[rowIndex - 1][2]) || 0;
+      const existingSalesAmount = parseFloat(sheetData[rowIndex - 1][3]) || 0;
+      const existingWithdrawal = parseFloat(sheetData[rowIndex - 1][5]) || 0;
+      const existingAverage = parseFloat(sheetData[rowIndex - 1][6]) || 0;
+
+      const newSalesDollar = existingSalesDollar + totalSalesDollar;
+      const newSalesAmount = existingSalesAmount + totalSalesAmount;
+      const newWithdrawal = existingWithdrawal + withdrawalAmount;
+
+      // 평균달러는 기존 평균과 새 평균을 더해서 건수로 나눔
+      const existingCount = existingAverage > 0 ? 1 : 0; // 기존 거래가 있었는지
+      const newCount = existingCount + 1;
+      const newAveragePrice = Math.round((existingAverage * existingCount + averagePrice) / newCount);
+
+      // 업데이트
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: GOOGLE_SHEET_ID,
+        range: `출금내역시트!C${rowIndex}:G${rowIndex}`,
+        valueInputOption: 'RAW',
+        resource: {
+          values: [[
+            Math.round(newSalesDollar),    // C열: 판매달러
+            Math.round(newSalesAmount),    // D열: 판매금액
+            today,                          // E열: 출금날짜
+            newWithdrawal,                  // F열: 출금액
+            newAveragePrice                 // G열: 평균달러
+          ]]
+        }
+      });
+
+      return `✅ <b>업비트 판매 기록 업데이트!</b>\n\n` +
+             `📅 날짜: ${today}\n` +
+             `💰 판매달러: ${Math.round(newSalesDollar)} USDT (기존: ${Math.round(existingSalesDollar)})\n` +
+             `💵 판매금액: ${Math.round(newSalesAmount).toLocaleString()}원 (기존: ${Math.round(existingSalesAmount).toLocaleString()})\n` +
+             `📤 출금액: ${newWithdrawal.toLocaleString()}원 (기존: ${existingWithdrawal.toLocaleString()})\n` +
+             `📊 평균달러: ${newAveragePrice.toLocaleString()}원 (기존: ${existingAverage.toLocaleString()})\n` +
+             `🔢 총 거래 건수: ${todayOrders.length}건`;
+    }
+
+  } catch (error) {
+    console.error('업비트 판매 확인 오류:', error);
+    return '⚠️ 업비트 판매 확인 중 오류가 발생했습니다.';
   }
 }
 
