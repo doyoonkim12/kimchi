@@ -186,17 +186,29 @@ async function createWaitingStatus(accountCode, amount, foreignAmount, currencyT
 
     console.log('데이터 저장 완료:', appendResult.data);
 
-    return `✅ <b>정상등록 되었습니다</b>\n\n` +
+    const response = `✅ <b>정상등록 되었습니다</b>\n\n` +
            `📋 <b>등록 정보</b>\n` +
            `발급코드: ${issueCode}\n` +
+           `이름: ${accountData.name}\n` +
            `계좌: ${accountCode}\n` +
            `출금: ${formatNumber(amount)}원\n` +
            `외화: ${foreignAmount} ${normalizedCurrency}\n\n` +
            `📌 <b>다음 단계</b>:\n${issueCode} 외화입금 [입금된금액]`;
 
+    // 일괄 등록용으로 이름과 발급코드 반환
+    return {
+      message: response,
+      issueCode: issueCode,
+      name: accountData.name,
+      accountCode: accountCode,
+      withdrawal: amount,
+      foreignAmount: foreignAmount,
+      currencyType: normalizedCurrency
+    };
+
   } catch (error) {
     console.error('대기상태 생성 오류:', error);
-    return '등록을 실패하였습니다. (형식오류)';
+    return { message: '등록을 실패하였습니다. (계좌코드 오류)', error: true };
   }
 }
 
@@ -537,15 +549,12 @@ async function processTelegramCommand(text, chatId, userId, userName) {
 
           const result = await createWaitingStatus(accountCode, withdrawal, foreignAmount, currencyType);
 
-          if (result.includes('정상등록')) {
+          if (!result.error) {
             successCount++;
-            // 발급코드 추출
-            const codeMatch = result.match(/발급코드 : (\d+)/);
-            const code = codeMatch ? codeMatch[1] : '?';
-            results.push(`${i + 1}. ✅ 코드: ${code} | ${accountCode} ${formatNumber(withdrawal)}원 ${foreignAmount} ${currencyType}`);
+            results.push(`${i + 1}. ✅ 코드: ${result.issueCode} | ${result.name} ${formatNumber(result.withdrawal)}원 ${result.foreignAmount} ${result.currencyType}`);
           } else {
             failCount++;
-            results.push(`${i + 1}. ❌ ${accountCode} - ${result}`);
+            results.push(`${i + 1}. ❌ ${accountCode} - ${result.message}`);
           }
         } else {
           failCount++;
@@ -567,7 +576,8 @@ async function processTelegramCommand(text, chatId, userId, userName) {
 
     // 1. 대기상태 생성 (계좌코드 + 금액 + 외화 + 종류)
     if (parts.length === 4 && !isNaN(parts[1]) && !isNaN(parts[2])) {
-      return await createWaitingStatus(parts[0], parts[1], parts[2], parts[3]);
+      const result = await createWaitingStatus(parts[0], parts[1], parts[2], parts[3]);
+      return result.message || result;
     }
     
     // 2. 상태별 명령어 처리
@@ -707,6 +717,7 @@ async function getAllWorkList() {
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       const date = row[0] || '';
+      const name = row[1] || '';
       const issueCode = row[17] || '';
       const withdrawal = row[5] || '0';
       const foreignAmount = row[10] || '0';
@@ -719,31 +730,31 @@ async function getAllWorkList() {
       // 대기
       if (!row[9] && !row[11] && !row[14]) {
         categories.waiting.push(
-          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
+          `코드:${issueCode} | ${name}, ${date}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
         );
       }
       // 진행대기
       else if (row[11] && !row[14]) {
         categories.progressWaiting.push(
-          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
+          `코드:${issueCode} | ${name}, ${date}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
         );
       }
       // 진행중
       else if (row[14] === '진행' && !row[16]) {
         categories.progress.push(
-          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
+          `코드:${issueCode} | ${name}, ${date}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}`
         );
       }
       // 정산대기
       else if (row[16] && !row[4]) {
         categories.settlementWaiting.push(
-          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, 최종달러:${finalDollar}, 달러가격:${dollarPrice}`
+          `코드:${issueCode} | ${name}, ${date}, ${formatNumber(withdrawal)}원, 최종달러:${finalDollar}, 달러가격:${dollarPrice}`
         );
       }
       // 정산중
       else if (row[6] && !row[8]) {
         categories.settlement.push(
-          `${date}, 코드:${issueCode}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
+          `코드:${issueCode} | ${name}, ${date}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
         );
       }
       // 정산완료 - 목록에서 제외 (더 이상 표시하지 않음)
@@ -821,13 +832,14 @@ async function getWaitingList() {
 
       if (isWaiting) {
         const date = row[0] || ''; // A열: 입금날짜
+        const name = row[1] || ''; // B열: 이름
         const issueCode = row[17] || ''; // R열: 발급코드
         const withdrawal = row[5] || '0'; // F열: 출금
         const foreignAmount = row[10] || '0'; // K열: 외화
         const currency = row[13] || ''; // N열: 종류
 
         waitingItems.push(
-          `${date}, 코드:${issueCode}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}, 해외계좌입금전`
+          `코드:${issueCode} | ${name}, ${date}, ${formatNumber(withdrawal)}원, ${foreignAmount}${currency}, 해외계좌입금전`
         );
       }
     }
