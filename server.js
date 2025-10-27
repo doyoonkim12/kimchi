@@ -1980,67 +1980,29 @@ async function recordUSDTDeposit(amount, depositDate, txid = '') {
     const sheetData = response.data.values || [];
     let rowIndex = -1;
 
-    // 해당 날짜가 이미 있는지 확인 (A열에서 날짜 찾기)
-    for (let i = 1; i < sheetData.length; i++) {
-      if (sheetData[i][0] === date) {
-        rowIndex = i + 1; // 1-based index
-        break;
-      }
-    }
-
-    // txid 중복 체크 (H열에 txid 목록이 저장됨)
-    if (txid && rowIndex !== -1) {
-      const existingTxids = sheetData[rowIndex - 1][7] || ''; // H열 (index 7)
-      if (existingTxids.includes(txid.substring(0, 10))) {
-        console.log(`중복 txid 발견, 스킵: ${txid.substring(0, 10)}`);
-        return; // 중복이면 기록하지 않음
-      }
-    }
-
-    if (rowIndex === -1) {
-      // 새 행 추가: A열(입금날짜), B열(입금달러), H열(txid)
-      const txidShort = txid ? txid.substring(0, 10) : '';
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: GOOGLE_SHEET_ID,
-        range: '출금내역시트!A:H',
-        valueInputOption: 'RAW',
-        resource: {
-          values: [[date, Math.round(amount), '', '', '', '', '', txidShort]]
+    // txid 중복 체크 (모든 행에서 체크)
+    if (txid) {
+      const txidShort = txid.substring(0, 10);
+      for (let i = 1; i < sheetData.length; i++) {
+        const existingTxids = sheetData[i][7] || ''; // H열
+        if (existingTxids.includes(txidShort)) {
+          console.log(`중복 txid 발견, 스킵: ${txidShort}`);
+          return; // 중복이면 기록하지 않음
         }
-      });
-      console.log(`출금내역시트 신규 입금 기록: ${date}, ${Math.round(amount)} USDT, txid: ${txidShort}`);
-    } else {
-      // 기존 행의 B열 업데이트 (기존 값에 누적)
-      const existingAmount = parseFloat(sheetData[rowIndex - 1][1]) || 0;
-      const newAmount = existingAmount + amount;
-
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: GOOGLE_SHEET_ID,
-        range: `출금내역시트!B${rowIndex}`,
-        valueInputOption: 'RAW',
-        resource: {
-          values: [[Math.round(newAmount)]]
-        }
-      });
-
-      // H열에 txid 추가 (기존 txid들과 구분하여 저장)
-      if (txid) {
-        const existingTxids = sheetData[rowIndex - 1][7] || '';
-        const txidShort = txid.substring(0, 10);
-        const updatedTxids = existingTxids ? `${existingTxids},${txidShort}` : txidShort;
-
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: GOOGLE_SHEET_ID,
-          range: `출금내역시트!H${rowIndex}`,
-          valueInputOption: 'RAW',
-          resource: {
-            values: [[updatedTxids]]
-          }
-        });
       }
-
-      console.log(`출금내역시트 입금 누적: ${date}, ${Math.round(newAmount)} USDT (기존: ${Math.round(existingAmount)})`);
     }
+
+    // 항상 새 행 추가 (날짜가 같아도 각 입금은 별도 행으로 기록)
+    const txidShort = txid ? txid.substring(0, 10) : '';
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '출금내역시트!A:H',
+      valueInputOption: 'RAW',
+      resource: {
+        values: [[date, Math.round(amount), '', '', '', '', '', txidShort]]
+      }
+    });
+    console.log(`출금내역시트 신규 입금 기록: ${date}, ${Math.round(amount)} USDT, txid: ${txidShort}`);
   } catch (error) {
     console.error('출금내역시트 입금 기록 오류:', error);
   }
