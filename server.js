@@ -358,7 +358,8 @@ async function processDeposit(issueCode, amount, row) {
     });
     
     const name = await getCellValue('당일작업!B' + row);
-    return `코드 : ${issueCode} ${name} ${formatNumber(profit)}원 입금요망`;
+    const bankInfo = await getCellValue('당일작업!D' + row);
+    return `코드 : ${issueCode} ${bankInfo} ${name} ${formatNumber(profit)}원 입금요망`;
     
   } catch (error) {
     console.error('입금 처리 오류:', error);
@@ -386,7 +387,8 @@ async function processSettlement(issueCode, amount, row) {
     });
     
     const name = await getCellValue('당일작업!B' + row);
-    return `코드:${issueCode} ${name} ${formatNumber(amount)}원 정산완료`;
+    const bankInfo = await getCellValue('당일작업!D' + row);
+    return `코드:${issueCode} ${bankInfo} ${name} ${formatNumber(amount)}원 정산완료`;
     
   } catch (error) {
     console.error('정산 처리 오류:', error);
@@ -504,10 +506,51 @@ app.post('/webhook', async (req, res) => {
 
 // 텔레그램 명령어 처리
 async function processTelegramCommand(text, chatId, userId, userName) {
-  const parts = text.split(' ');
-  const command = parts[0].toLowerCase();
-  
   try {
+    // 일괄 등록 처리: 줄바꿈으로 여러 건 입력 감지
+    const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+
+    if (lines.length > 1) {
+      // 여러 줄인 경우 일괄 처리
+      let results = [];
+      let successCount = 0;
+      let failCount = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const lineParts = lines[i].split(' ');
+
+        // 각 줄이 4개 파트로 구성된 등록 명령인지 확인
+        if (lineParts.length === 4 && !isNaN(lineParts[1]) && !isNaN(lineParts[2])) {
+          const result = await createWaitingStatus(lineParts[0], lineParts[1], lineParts[2], lineParts[3]);
+
+          if (result.includes('정상등록')) {
+            successCount++;
+            // 발급코드 추출
+            const codeMatch = result.match(/발급코드 : (\d+)/);
+            const code = codeMatch ? codeMatch[1] : '?';
+            results.push(`${i + 1}. ✅ ${lineParts[0]} (코드: ${code})`);
+          } else {
+            failCount++;
+            results.push(`${i + 1}. ❌ ${lineParts[0]} - ${result}`);
+          }
+        } else {
+          failCount++;
+          results.push(`${i + 1}. ❌ 형식 오류: ${lines[i]}`);
+        }
+      }
+
+      let summary = `📊 <b>일괄 등록 결과</b>\n\n`;
+      summary += `✅ 성공: ${successCount}건\n`;
+      summary += `❌ 실패: ${failCount}건\n\n`;
+      summary += results.join('\n');
+
+      return summary;
+    }
+
+    // 단일 명령어 처리
+    const parts = text.split(' ');
+    const command = parts[0].toLowerCase();
+
     // 1. 대기상태 생성 (계좌코드 + 금액 + 외화 + 종류)
     if (parts.length === 4 && !isNaN(parts[1]) && !isNaN(parts[2])) {
       return await createWaitingStatus(parts[0], parts[1], parts[2], parts[3]);
@@ -1873,14 +1916,14 @@ async function updateDailyDollar(rowIndex) {
 // ============================================
 
 // 출금내역시트에 USDT 입금 기록 (업비트 A열, B열)
-async function recordUSDTDeposit(amount, depositDate) {
+async function recordUSDTDeposit(amount, depositDate, txid = '') {
   try {
     const date = new Date(depositDate).toLocaleDateString('ko-KR');
 
-    // 출금내역시트 읽기
+    // 출금내역시트 읽기 (A~H열: txid 중복 체크용)
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: GOOGLE_SHEET_ID,
-      range: '출금내역시트!A:B'
+      range: '출금내역시트!A:H'
     });
 
     const sheetData = response.data.values || [];
@@ -1894,17 +1937,27 @@ async function recordUSDTDeposit(amount, depositDate) {
       }
     }
 
+    // txid 중복 체크 (H열에 txid 목록이 저장됨)
+    if (txid && rowIndex !== -1) {
+      const existingTxids = sheetData[rowIndex - 1][7] || ''; // H열 (index 7)
+      if (existingTxids.includes(txid.substring(0, 10))) {
+        console.log(`중복 txid 발견, 스킵: ${txid.substring(0, 10)}`);
+        return; // 중복이면 기록하지 않음
+      }
+    }
+
     if (rowIndex === -1) {
-      // 새 행 추가: A열(입금날짜), B열(입금달러)
+      // 새 행 추가: A열(입금날짜), B열(입금달러), H열(txid)
+      const txidShort = txid ? txid.substring(0, 10) : '';
       await sheets.spreadsheets.values.append({
         spreadsheetId: GOOGLE_SHEET_ID,
-        range: '출금내역시트!A:B',
+        range: '출금내역시트!A:H',
         valueInputOption: 'RAW',
         resource: {
-          values: [[date, Math.round(amount)]]
+          values: [[date, Math.round(amount), '', '', '', '', '', txidShort]]
         }
       });
-      console.log(`출금내역시트 신규 입금 기록: ${date}, ${Math.round(amount)} USDT`);
+      console.log(`출금내역시트 신규 입금 기록: ${date}, ${Math.round(amount)} USDT, txid: ${txidShort}`);
     } else {
       // 기존 행의 B열 업데이트 (기존 값에 누적)
       const existingAmount = parseFloat(sheetData[rowIndex - 1][1]) || 0;
@@ -1918,6 +1971,23 @@ async function recordUSDTDeposit(amount, depositDate) {
           values: [[Math.round(newAmount)]]
         }
       });
+
+      // H열에 txid 추가 (기존 txid들과 구분하여 저장)
+      if (txid) {
+        const existingTxids = sheetData[rowIndex - 1][7] || '';
+        const txidShort = txid.substring(0, 10);
+        const updatedTxids = existingTxids ? `${existingTxids},${txidShort}` : txidShort;
+
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: GOOGLE_SHEET_ID,
+          range: `출금내역시트!H${rowIndex}`,
+          valueInputOption: 'RAW',
+          resource: {
+            values: [[updatedTxids]]
+          }
+        });
+      }
+
       console.log(`출금내역시트 입금 누적: ${date}, ${Math.round(newAmount)} USDT (기존: ${Math.round(existingAmount)})`);
     }
   } catch (error) {
@@ -2144,7 +2214,7 @@ async function checkRecentDeposits(chatId) {
         amount: netAmount,
         time: time,
         date: depositDate, // Date 객체 저장
-        txid: txid.substring(0, 20)
+        txid: txid // 전체 txid 저장 (recordUSDTDeposit에서 처리)
       };
 
       newDeposits.push(depositInfo);
@@ -2161,7 +2231,7 @@ async function checkRecentDeposits(chatId) {
     newDeposits.forEach((deposit, index) => {
       message += `${index + 1}. 💰 ${deposit.amount.toFixed(2)} USDT\n`;
       message += `   ⏰ ${deposit.time}\n`;
-      message += `   🔗 ${deposit.txid}...\n\n`;
+      message += `   🔗 ${deposit.txid.substring(0, 20)}...\n\n`;
     });
 
     message += `━━━━━━━━━━━━━━━━\n`;
@@ -2174,7 +2244,7 @@ async function checkRecentDeposits(chatId) {
 
       // 미기록 입금을 시트에 기록
       for (const deposit of newDeposits) {
-        await recordUSDTDeposit(deposit.amount, deposit.date); // Date 객체 사용
+        await recordUSDTDeposit(deposit.amount, deposit.date, deposit.txid); // txid 포함
       }
 
       message += `\n✅ <b>시트 기록 완료!</b>`;
