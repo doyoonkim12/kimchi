@@ -1061,17 +1061,21 @@ async function executeRebuild() {
     let personalSheetCount = 0;
     const processedRows = [];
 
-    // 2. 완료된 행들 처리 (모든 주요 열이 채워진 작업)
+    // 2. 완료된 행들 처리 (A~T열 모두 채워진 작업만)
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
 
-      // 완료 조건: 모든 주요 데이터가 채워져 있어야 함
+      // 완료 조건: A열부터 T열까지 모두 채워져 있어야 함 (20개 열)
       const isComplete =
         row[0] &&   // A열: 입금날짜
         row[1] &&   // B열: 이름
+        row[2] &&   // C열: 플랫폼
+        row[3] &&   // D열: 계좌정보
         row[4] &&   // E열: 입금
         row[5] &&   // F열: 출금
         row[6] &&   // G열: 수익
+        row[7] &&   // H열: 수익입금
+        row[8] &&   // I열: 정산
         row[9] &&   // J열: 외화입금날짜
         row[10] &&  // K열: 외화
         row[11] &&  // L열: 외화입금
@@ -1081,7 +1085,8 @@ async function executeRebuild() {
         row[15] &&  // P열: 바낸달러
         row[16] &&  // Q열: 최종달러
         row[17] &&  // R열: 발급코드
-        row[18];    // S열: 달러가격
+        row[18] &&  // S열: 달러가격
+        row[19];    // T열: 계좌코드
 
       if (isComplete) {
         const name = row[1]; // B열: 이름
