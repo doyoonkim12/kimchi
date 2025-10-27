@@ -183,8 +183,8 @@ async function createWaitingStatus(accountCode, amount, foreignAmount, currencyT
 
     console.log('데이터 저장 완료:', appendResult.data);
 
-    return `정상등록 되었습니다.\n발급코드 : ${issueCode}`;
-    
+    return `정상등록 되었습니다.\n발급코드 : ${issueCode}\n\n📌 <b>다음 단계</b>:\n${issueCode} 외화입금 [입금된금액]`;
+
   } catch (error) {
     console.error('대기상태 생성 오류:', error);
     return '등록을 실패하였습니다. (형식오류)';
@@ -270,8 +270,8 @@ async function processForeignDeposit(issueCode, amount, row) {
       resource: { values: [[foreignWithdrawal]] }
     });
     
-    return `코드 : ${issueCode} 금액 : ${foreignWithdrawal} 거래소입금요망!`;
-    
+    return `코드 : ${issueCode} 금액 : ${foreignWithdrawal} 거래소입금요망!\n\n📌 <b>다음 단계</b>:\n${issueCode} 진행`;
+
   } catch (error) {
     console.error('외화입금 처리 오류:', error);
     return '외화입금 처리 중 오류가 발생했습니다.';
@@ -289,8 +289,8 @@ async function processProgress(issueCode, row) {
     });
     
     const foreignWithdrawal = await getCellValue('당일작업!M' + row);
-    return `코드 : ${issueCode} 금액 : ${foreignWithdrawal} 작업중!`;
-    
+    return `코드 : ${issueCode} 금액 : ${foreignWithdrawal} 작업중!\n\n📌 <b>다음 단계</b>:\n${issueCode} 바낸달러 [보낸금액]`;
+
   } catch (error) {
     console.error('진행 처리 오류:', error);
     return '진행 처리 중 오류가 발생했습니다.';
@@ -324,9 +324,9 @@ async function processRemainingDollar(issueCode, amount, row) {
     const name = await getCellValue('당일작업!B' + row);
     const withdrawal = await getCellValue('당일작업!F' + row);
     const dollarPrice = await getCellValue('당일작업!S' + row);
-    
-    return `코드 : ${issueCode} , 달러 ${finalDollar} 가격 : ${dollarPrice}\n${bankInfo} ${name} ${formatNumber(withdrawal)}원 입금요망`;
-    
+
+    return `코드 : ${issueCode} , 달러 ${finalDollar} 가격 : ${dollarPrice}\n${bankInfo} ${name} ${formatNumber(withdrawal)}원 입금요망\n\n📌 <b>다음 단계</b>:\n${issueCode} 입금 [입금완료금액]`;
+
   } catch (error) {
     console.error('바낸달러 처리 오류:', error);
     return '바낸달러 처리 중 오류가 발생했습니다.';
@@ -359,8 +359,8 @@ async function processDeposit(issueCode, amount, row) {
     
     const name = await getCellValue('당일작업!B' + row);
     const bankInfo = await getCellValue('당일작업!D' + row);
-    return `코드 : ${issueCode} ${bankInfo} ${name} ${formatNumber(profit)}원 입금요망`;
-    
+    return `코드 : ${issueCode} ${bankInfo} ${name} ${formatNumber(profit)}원 입금요망\n\n📌 <b>다음 단계</b>:\n${issueCode} 정산 [정산금액]`;
+
   } catch (error) {
     console.error('입금 처리 오류:', error);
     return '입금 처리 중 오류가 발생했습니다.';
@@ -388,8 +388,8 @@ async function processSettlement(issueCode, amount, row) {
     
     const name = await getCellValue('당일작업!B' + row);
     const bankInfo = await getCellValue('당일작업!D' + row);
-    return `코드:${issueCode} ${bankInfo} ${name} ${formatNumber(amount)}원 정산완료`;
-    
+    return `코드:${issueCode} ${bankInfo} ${name} ${formatNumber(amount)}원 정산완료\n\n✅ 모든 작업이 완료되었습니다!`;
+
   } catch (error) {
     console.error('정산 처리 오류:', error);
     return '정산 처리 중 오류가 발생했습니다.';
