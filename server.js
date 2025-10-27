@@ -686,12 +686,7 @@ async function getAllWorkList() {
           `${date}, 코드:${issueCode}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
         );
       }
-      // 정산완료
-      else if (row[8] === '정산완료') {
-        categories.complete.push(
-          `${date}, 코드:${issueCode}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
-        );
-      }
+      // 정산완료 - 목록에서 제외 (더 이상 표시하지 않음)
     }
 
     // 대기
@@ -724,11 +719,7 @@ async function getAllWorkList() {
       result += categories.settlement.join('\n') + '\n\n';
     }
 
-    // 정산완료
-    if (categories.complete.length > 0) {
-      result += `✅ <b>정산완료 (${categories.complete.length}건)</b>\n`;
-      result += categories.complete.join('\n') + '\n\n';
-    }
+    // 정산완료는 표시하지 않음 (리빌드 전까지 숨김)
 
     // 모든 항목이 비어있는 경우
     if (Object.values(categories).every(arr => arr.length === 0)) {
@@ -973,47 +964,7 @@ async function getSettlementList() {
 }
 
 async function getSettlementCompleteList() {
-  try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: GOOGLE_SHEET_ID,
-      range: '당일작업!A:T'
-    });
-
-    const data = response.data.values;
-    if (!data || data.length <= 1) {
-      return '정산완료된 작업이 없습니다.';
-    }
-
-    const items = [];
-
-    for (let i = 1; i < data.length; i++) {
-      const row = data[i];
-
-      // 정산완료 상태: 정산(I열=8)이 "정산완료"
-      const isComplete = row[8] === '정산완료';
-
-      if (isComplete) {
-        const date = row[0] || '';
-        const issueCode = row[17] || '';
-        const deposit = row[4] || '0';
-        const profit = row[6] || '0';
-
-        items.push(
-          `${date}, 코드:${issueCode}, ${formatNumber(deposit)}원, 수익:${formatNumber(profit)}원`
-        );
-      }
-    }
-
-    if (items.length === 0) {
-      return '정산완료된 작업이 없습니다.';
-    }
-
-    return `📋 정산완료 목록\n\n` + items.join('\n');
-
-  } catch (error) {
-    console.error('정산완료 목록 조회 오류:', error);
-    return '정산완료 목록 조회 중 오류가 발생했습니다.';
-  }
+  return '✅ 정산완료된 작업은 리빌드 후 개인 시트로 이동됩니다.\n\n💡 <b>리빌드</b> 명령어로 정산완료 작업을 정리하세요!';
 }
 
 async function getCompleteList() {
@@ -1033,7 +984,9 @@ async function executeRebuild() {
       return '리빌드할 데이터가 없습니다.';
     }
 
-    let processedCount = 0;
+    let totalProcessedCount = 0;
+    let fullSheetCount = 0;
+    let personalSheetCount = 0;
     const processedRows = [];
 
     // 2. 정산완료된 행들 처리
@@ -1045,11 +998,20 @@ async function executeRebuild() {
         const name = row[1]; // B열: 이름
         const issueCode = row[17]; // R열: 발급코드
 
-        // 개인 시트에 데이터 복사
-        const copied = await copyToPersonalSheet(name, row, issueCode);
+        // 2-1. 전체시트에 데이터 복사
+        const copiedToFull = await copyToFullSheet(row, issueCode);
+        if (copiedToFull) {
+          fullSheetCount++;
+        }
 
-        if (copied) {
-          processedCount++;
+        // 2-2. 개인 시트에 데이터 복사
+        const copiedToPersonal = await copyToPersonalSheet(name, row, issueCode);
+        if (copiedToPersonal) {
+          personalSheetCount++;
+        }
+
+        if (copiedToFull || copiedToPersonal) {
+          totalProcessedCount++;
           processedRows.push(i + 1); // 행 번호 저장 (1-based)
         }
       }
@@ -1074,11 +1036,71 @@ async function executeRebuild() {
       });
     }
 
-    return `리빌드 완료!\n처리된 항목: ${processedCount}개`;
+    return `✅ <b>리빌드 완료!</b>\n\n📊 총 처리: ${totalProcessedCount}건\n📋 전체시트: ${fullSheetCount}건\n👤 개인시트: ${personalSheetCount}건`;
 
   } catch (error) {
     console.error('리빌드 오류:', error);
     return '리빌드 처리 중 오류가 발생했습니다.';
+  }
+}
+
+// 전체시트에 데이터 복사
+async function copyToFullSheet(rowData, issueCode) {
+  try {
+    // 1. 전체시트에서 중복 발급코드 체크
+    const checkResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '전체!P:P' // P열: 발급코드
+    }).catch(() => null);
+
+    if (checkResponse && checkResponse.data.values) {
+      // 중복 체크
+      for (let i = 1; i < checkResponse.data.values.length; i++) {
+        if (checkResponse.data.values[i][0] === issueCode) {
+          console.log(`전체시트 중복 발급코드 발견: ${issueCode}`);
+          return false; // 중복이면 복사 안함
+        }
+      }
+    }
+
+    // 2. 전체시트용 데이터 구성 (당일작업과 동일한 구조)
+    const fullData = [
+      rowData[0],  // 입금날짜 (A)
+      rowData[1],  // 이름 (B)
+      rowData[2],  // 플랫폼 (C)
+      rowData[3],  // 계좌정보/은행 (D)
+      rowData[4],  // 입금 (E)
+      rowData[5],  // 출금 (F)
+      rowData[6],  // 수익 (G)
+      rowData[7],  // 수익입금 (H)
+      rowData[8],  // 정산 (I)
+      rowData[9],  // 외화입금날짜 (J)
+      rowData[10], // 외화 (K)
+      rowData[11], // 외화입금 (L)
+      rowData[12], // 외화출금 (M)
+      rowData[13], // 종류 (N)
+      rowData[14], // 진행여부 (O)
+      rowData[15], // 바낸달러 (P)
+      rowData[16], // 최종달러 (Q)
+      rowData[17], // 발급코드 (R)
+      rowData[18], // 달러가격 (S)
+      rowData[19]  // 계좌코드 (T)
+    ];
+
+    // 3. 전체시트에 추가
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '전체!A:T',
+      valueInputOption: 'RAW',
+      resource: { values: [fullData] }
+    });
+
+    console.log(`전체시트에 발급코드 ${issueCode} 데이터 복사 완료`);
+    return true;
+
+  } catch (error) {
+    console.error(`전체시트 복사 오류 (발급코드: ${issueCode}):`, error);
+    return false;
   }
 }
 
