@@ -1170,7 +1170,58 @@ async function getStatusList(status) {
 }
 
 async function getCodeInfo(code) {
-  return `코드 ${code} 정보 조회 기능을 구현 중입니다.`;
+  try {
+    // 당일작업 시트에서 발급코드 검색
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: '당일작업!A:T'
+    });
+
+    const data = response.data.values;
+    if (!data || data.length <= 1) {
+      return '작업 내역이 없습니다.';
+    }
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const issueCode = row[17] || ''; // R열: 발급코드
+
+      if (issueCode === code) {
+        const date = row[0] || '';
+        const name = row[1] || '';
+        const bankInfo = row[3] || '';
+        const withdrawal = row[5] || '0';
+        const foreignAmount = row[10] || '0';
+        const currency = row[13] || '';
+        const progress = row[14] || '대기';
+        const finalDollar = row[16] || '';
+        const dollarPrice = row[18] || '';
+
+        let result = `📝 <b>발급코드: ${code}</b>\n\n`;
+        result += `👤 이름: ${name}\n`;
+        result += `🏦 계좌: ${bankInfo}\n`;
+        result += `📅 날짜: ${date}\n`;
+        result += `💰 출금: ${formatNumber(withdrawal)}원\n`;
+        result += `💵 외화: ${foreignAmount} ${currency}\n`;
+        result += `📊 진행상황: ${progress}\n`;
+
+        if (finalDollar) {
+          result += `💵 최종달러: ${finalDollar}\n`;
+        }
+        if (dollarPrice) {
+          result += `💱 달러가격: ${formatNumber(dollarPrice)}원\n`;
+        }
+
+        return result;
+      }
+    }
+
+    return `⚠️ 발급코드 ${code}를 찾을 수 없습니다.`;
+
+  } catch (error) {
+    console.error('코드 정보 조회 오류:', error);
+    return '코드 정보 조회 중 오류가 발생했습니다.';
+  }
 }
 
 async function getUserStatus(name) {
